@@ -501,23 +501,21 @@ class Boat:
         
 
 class Trip:
-    def __init__(self, start_port=None, stations=[], end_port=None, id=None):
+    def __init__(self, start_port, stations=[], end_port=None, id=0):
         self.start_port = start_port
-        self.end_port = end_port
-        self.stations = stations.copy()
-        if start_port is None:
-            self.actual_trip = []
-            self.nice_trip = []
+        if end_port is None:
+            self.end_port = start_port
         else:
-            self.actual_trip = [start_port]
-            self.nice_trip = [start_port]
-        self.total_catch = 0 
+            self.end_port = end_port
+        self.stations = stations
+        self.total_dist = 0
+        self.total_catch = 0
         self.total_time = 0
         self.fish_time = 0
         self.route_lines = []
         self.id = id
         try:
-            self.time = np.load("my_code/local data/true_time.npy")
+            self.time = np.load("final_code/local data/true_time.npy")
         except (FileNotFoundError, ValueError):
             try:
                 self.time = np.load("local data/true_time.npy")
@@ -674,4 +672,3 @@ class Trip:
             actual_trip = solve_tsp(actual_trip, self.time)
             self.actual_trip = actual_trip.copy()
             self.get_nice_trip_from_actual_trip()
-        
