@@ -1,0 +1,9 @@
+SPECIAL
+PROBLEM_FILE = /media/tada955/Elements/University/Lecturer/Projects/ground_fish/gfsp/output/lkh/input_files/20/3/1250/ins_20_3_1250_26.vrp
+TOUR_FILE = /media/tada955/Elements/University/Lecturer/Projects/ground_fish/gfsp/output/lkh/solutions/20/3/1250/ins_20_3_1250_26.tour
+MAX_CANDIDATES = 6
+MAX_TRIALS = 10000
+RUNS = 1
+SEED = 1
+TRACE_LEVEL = 1
+TIME_LIMIT = 180

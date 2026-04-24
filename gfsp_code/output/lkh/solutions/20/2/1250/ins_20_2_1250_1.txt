@@ -1,0 +1,172 @@
+PARAMETER_FILE = /media/tada955/Elements/University/Lecturer/Projects/ground_fish/gfsp/output/lkh/input_files/20/2/1250/ins_20_2_1250_1.par
+The number of vehicles is: 1 
+Reading PROBLEM_FILE: "/media/tada955/Elements/University/Lecturer/Projects/ground_fish/gfsp/output/lkh/input_files/20/2/1250/ins_20_2_1250_1.vrp" ... done
+ASCENT_CANDIDATES = 50
+BACKBONE_TRIALS = 0
+BACKTRACKING = NO
+# BWTSP =
+# CANDIDATE_FILE =
+CANDIDATE_SET_TYPE = ALPHA
+# DISTANCE =
+DEPOT = 41
+# EDGE_FILE =
+EXCESS = 0.0344828
+EXTERNAL_SALESMEN = 0
+EXTRA_CANDIDATES = 0 
+EXTRA_CANDIDATE_SET_TYPE = QUADRANT
+GAIN23 = NO
+GAIN_CRITERION = YES
+INITIAL_PERIOD = 100
+INITIAL_STEP_SIZE = 1
+INITIAL_TOUR_ALGORITHM = WALK
+# INITIAL_TOUR_FILE = 
+INITIAL_TOUR_FRACTION = 1.000
+# INPUT_TOUR_FILE = 
+K = 0
+KICK_TYPE = 4
+KICKS = 1
+# MAX_BREADTH =
+MAKESPAN = NO
+MAX_CANDIDATES = 6 
+MAX_SWAPS = 0
+MAX_TRIALS = 10000
+# MERGE_TOUR_FILE =
+MOVE_TYPE = 5 SPECIAL
+MTSP_MIN_SIZE = 1
+MTSP_MAX_SIZE = 57
+# MTSP_SOLUTION_FILE = 
+# NONSEQUENTIAL_MOVE_TYPE = 5
+# OPTIMUM =
+# OUTPUT_TOUR_FILE = 
+PATCHING_A = 1 
+PATCHING_C = 0 
+# PI_FILE = 
+POPMUSIC_INITIAL_TOUR = NO
+POPMUSIC_MAX_NEIGHBORS = 5
+POPMUSIC_SAMPLE_SIZE = 10
+POPMUSIC_SOLUTIONS = 50
+POPMUSIC_TRIALS = 1
+POPULATION_SIZE = 10
+PRECISION = 100
+# PROBABILITY =
+PROBLEM_FILE = /media/tada955/Elements/University/Lecturer/Projects/ground_fish/gfsp/output/lkh/input_files/20/2/1250/ins_20_2_1250_1.vrp
+RECOMBINATION = IPT
+RESTRICTED_SEARCH = YES
+RUNS = 1
+SALESMEN = 2
+SCALE = 1
+SEED = 1
+# SINTEF_SOLUTION_FILE = 
+STOP_AT_OPTIMUM = YES
+SUBGRADIENT = YES
+# SUBPROBLEM_SIZE =
+# SUBPROBLEM_TOUR_FILE = 
+SUBSEQUENT_MOVE_TYPE = 5 SPECIAL
+SUBSEQUENT_PATCHING = YES
+TIME_LIMIT = 180.0
+# TOTAL_TIME_LIMIT =
+TOUR_FILE = /media/tada955/Elements/University/Lecturer/Projects/ground_fish/gfsp/output/lkh/solutions/20/2/1250/ins_20_2_1250_1.tour
+TRACE_LEVEL = 1
+VEHICLES = 2
+
+The number of vehicles is: 2 
+The trip distance limit is: 600000 
+The total distance limit is: 2100000 
+1 1 0 0 2 
+2 2 0 0 1 
+3 3 0 0 4 
+4 4 0 0 3 
+5 5 0 0 6 
+6 6 0 0 5 
+7 7 0 0 8 
+8 8 0 0 7 
+9 9 0 0 10 
+10 10 0 0 9 
+11 11 0 0 12 
+12 12 0 0 11 
+13 13 0 0 14 
+14 14 0 0 13 
+15 15 0 0 16 
+16 16 0 0 15 
+17 17 0 0 18 
+18 18 0 0 17 
+19 19 0 0 20 
+20 20 0 0 19 
+21 21 0 0 22 
+22 22 0 0 21 
+23 23 0 0 24 
+24 24 0 0 23 
+25 25 0 0 26 
+26 26 0 0 25 
+27 27 0 0 28 
+28 28 0 0 27 
+29 29 0 0 30 
+30 30 0 0 29 
+31 31 0 0 32 
+32 32 0 0 31 
+33 33 0 0 34 
+34 34 0 0 33 
+35 35 0 0 36 
+36 36 0 0 35 
+37 37 0 0 38 
+38 38 0 0 37 
+39 39 0 0 40 
+40 40 0 0 39 
+41 41 1 1 0 
+42 42 0 1 0 
+43 43 0 1 0 
+44 44 0 1 0 
+45 45 0 1 0 
+46 46 0 1 0 
+47 47 0 1 0 
+48 48 0 1 0 
+49 49 0 1 0 
+50 50 0 1 0 
+51 51 0 1 0 
+52 52 0 1 0 
+53 53 0 1 0 
+54 54 0 1 0 
+55 55 0 1 0 
+56 56 0 1 0 
+57 57 0 1 0 
+58 58 0 1 0 
+59 59 2 1 0 
+Lower bound = 958916.0, Ascent time = 0.01 sec.
+Cand.min = 5, Cand.avg = 5.9, Cand.max = 6
+Edges.fixed = 20 [Cost = 0]
+Preprocessing time = 0.01 sec.
+* 1: Cost = 0_2844570, Time = 0.01 sec. 
+* 2: Cost = 0_2784690, Time = 0.01 sec. 
+* 7: Cost = 0_2775019, Time = 0.04 sec. 
+* 8: Cost = 0_2621335, Time = 0.04 sec. 
+* 12: Cost = 0_2558236, Time = 0.05 sec. 
+* 16: Cost = 0_2550351, Time = 0.07 sec. 
+* 17: Cost = 0_2486295, Time = 0.07 sec. 
+* 26: Cost = 0_2485358, Time = 0.10 sec. 
+* 28: Cost = 0_2474527, Time = 0.11 sec. 
+* 44: Cost = 0_2470999, Time = 0.16 sec. 
+* 48: Cost = 0_2468045, Time = 0.17 sec. 
+* 50: Cost = 0_2459197, Time = 0.18 sec. 
+* 56: Cost = 0_2456351, Time = 0.20 sec. 
+* 67: Cost = 0_2434004, Time = 0.24 sec. 
+* 69: Cost = 0_2433281, Time = 0.25 sec. 
+* 116: Cost = 0_2430172, Time = 0.39 sec. 
+* 415: Cost = 0_2426193, Time = 1.33 sec. 
+* 483: Cost = 0_2422001, Time = 1.56 sec. 
+* 796: Cost = 0_2421971, Time = 2.54 sec. 
+* 966: Cost = 0_2404393, Time = 3.12 sec. 
+Population:
+  1: 0_2404393
+Writing TOUR_FILE: "/media/tada955/Elements/University/Lecturer/Projects/ground_fish/gfsp/output/lkh/solutions/20/2/1250/ins_20_2_1250_1.tour" ... done
+Run 1: Cost = 0_2404393, Time = 40.07 sec. 
+
+Successes/Runs = 0/1 
+Cost.min = 2404393, Cost.avg = 2404393.00, Cost.max = 2404393
+Gap.min = 0.0000%, Gap.avg = 0.0000%, Gap.max = 0.0000%
+Penalty.min = 0, Penalty.avg = 0.00, Penalty.max = 0
+Trials.min = 10000, Trials.avg = 10000.0, Trials.max = 10000
+Time.min = 40.07 sec., Time.avg = 40.07 sec., Time.max = 40.07 sec.
+Time.total = 40.08 sec.
+  Size.min = 13, Size.max = 44, Penalty = 0
+  Cost.min = 485809, Cost.max = 1918584, Cost.sum = 2404393
+

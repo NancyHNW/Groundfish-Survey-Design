@@ -1,0 +1,32 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "run_gfsp",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.scripts.run_gfsp"
+    },
+    {
+      "name": "run_lkh",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.scripts.run_lkh"
+    },
+    {
+      "name": "create_test_probs",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.scripts.create_test_probs"
+    },
+    {
+      "name": "create_lkh_tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "src.scripts.create_lkh_tests"
+    },
+  ]
+}
