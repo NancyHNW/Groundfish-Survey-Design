@@ -12,7 +12,7 @@ import time
 
 # needed to add this because had weird errors when using final testing scripts (not sure why)
 try:
-    time_matrix = np.load("my_code/local data/true_time.npy")
+    time_matrix = np.load("final_code/local data/true_time.npy")
 except FileNotFoundError:
     time_matrix = np.load("local data/true_time.npy")
 
@@ -32,7 +32,7 @@ class Problem:
             for i in range(n_boats):
                 self.boats.append(Boat(i+1, boat_capacities[i], home_ports[i]))
         try:
-            self.time = np.load("my_code/local data/true_time.npy")
+            self.time = np.load("final_code/local data/true_time.npy")
         except (FileNotFoundError, ValueError):
             try:
                 self.time = np.load("local data/true_time.npy")
@@ -344,7 +344,7 @@ class Boat:
         self.current_fish_time = 0 # current fish time (useful during construction of route)
         self.total_time = 0 # sum of all trips' total time
         try:
-            self.time = np.load("my_code/local data/true_time.npy")
+            self.time = np.load("final_code/local data/true_time.npy")
         except (FileNotFoundError, ValueError):
             try:
                 self.time = np.load("local data/true_time.npy")
