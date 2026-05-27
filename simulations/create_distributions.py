@@ -2,104 +2,103 @@
 import numpy as np
 import pandas as pd
 
+df = pd.read_excel('data/spring_historical_english.xlsx')
+
 # =============
 # Function 1: Call the distribution function to create a set of scenarios, and write it to a file
 # =============
-def create_scenarios(num_scenarios, distribution_func, output_file):
+def create_scenarios(station_ids, num_scenarios, distributions, output_file):
     """
-    Create a set of scenarios based on a specified distribution function and write them to a file.
+    Create a set of scenarios by sampling from each station's normal distribution.
 
     Parameters:
-        num_scenarios (int): The number of scenarios to generate.
-        distribution_func (function): A function that generates random numbers based on a specific distribution.
-        output_file (str): The path to the output file where the scenarios will be saved.
+        station_ids (list): A list of station IDs for which to create scenarios.
+        num_scenarios (int): The number of scenarios to generate for each station.
+        distributions (dict): The output of create_distributions(), containing each
+                              station's mean and std.
+        output_file (str): The path to the output CSV where the scenarios will be saved.
+
+    Returns:
+        scenarios (pd.DataFrame): A DataFrame of shape (num_scenarios, len(station_ids))
+                                  where each column is a station and each row is a scenario.
     """
-    # # Generate scenarios using the provided distribution function
-    # scenarios = distribution_func(num_scenarios)
-
-    # # Save the scenarios to a file
-    # np.savetxt(output_file, scenarios, delimiter=',')
-
-
-# =============
-# Function 2: Create distribution for per station catch amount
-# =============
-def create_station_distributions(df,
-                                 station_col='station_number',
-                                 catch_col='catch'):
-    """
-    Creates a normal distribution for each station.
-
-    Inputs: 
-        df (pd.DataFrame): The input DataFrame containing the catch data.
-        station_col (str): The name of the column in the DataFrame that contains station identifiers.
-        catch_col (str): The name of the column in the DataFrame that contains catch amounts.
     
-    Returns:
-        distribution (dict): A dictionary where each key is a station number and the value is another dictionary 
-                                containing the mean and standard deviation of the catch amounts for that station. 
-                    dict: {station_number: {'mean': μ, 'std': σ}}
-    """
+    scenarios = {}
 
-    distributions = {}
+    for station in station_ids:
+        mean = distributions[station]['mean']
+        std  = distributions[station]['std']
 
-    # Group the DataFrame by the station column
-    grouped = df.groupby(station_col)
+        # Sample num_scenarios values from this station's normal distribution
+        scenarios[station] = np.random.normal(loc=mean, scale=std, size=num_scenarios)
 
-    # For each station, calculate the mean and standard deviation of the catch amounts and store them in the distributions dictionary
-    for station, group in grouped:
-        catches = group[catch_col].dropna()
-        mean = catches.mean()
-        std = catches.std(ddof=1)
+    # Convert to DataFrame; rows = scenarios, columns = stations
+    scenarios = pd.DataFrame(scenarios)
+    scenarios.to_csv(output_file, index=False)
 
-        distributions[station] = {
-            'mean': mean,
-            'std': std
-        }
-
-    return distributions
-
+    return scenarios
+        
 
 # =============
-# Function 3: Create distribution for per region catch amount
+# Function 2: Create distributions for each group in the DataFrame
 # =============
-def create_region_distributions(df,
-                         group_col='region',
-                         station_col='station_number',
-                         catch_col='catch'):
+def create_distributions(df,
+                         group_col='station_number',
+                         catch_col='catch',
+                         station_col=None):
     """
-    Creates a normal distribution for each region and
-    records the station numbers belonging to that region.
+    Creates a normal distribution for each group in the DataFrame.
+
+    Inputs:
+        df (pd.DataFrame): The input DataFrame containing the catch data.
+        group_col (str): The column to group by (typically 'station_number' or 'region').
+        catch_col (str): The column containing catch amounts.
+        station_col (str | None): If provided, each group's entry will include a sorted
+                                  list of unique station numbers under the 'stations' key.
 
     Returns:
-        dict:
-            {
-                region_name: {
-                    'stations': [...],
-                    'mean': mean,
-                    'std': std
-                }
+        dict: {
+            group_name: {
+                'mean': float,
+                'std': float,
+                ['stations': list]  # only present if station_col is provided
             }
+        }
     """
 
     distributions = {}
 
-    grouped = df.groupby(group_col)
-
-    for group_name, group in grouped:
-
+    # group by the specified column and calculate mean and std for each group
+    for group_name, group in df.groupby(group_col):
         catches = group[catch_col].dropna()
-        mean = catches.mean()
-        std = catches.std(ddof=1)
-
-        # Get the unique station numbers for the current region and sort them
-        stations = sorted(group[station_col].unique())
-
-        # Store the station numbers, mean, and standard deviation in the distributions dictionary
-        distributions[group_name] = {
-            'stations': stations,
-            'mean': mean,
-            'std': std
+        entry = {
+            'mean': catches.mean(),
+            'std': catches.std(ddof=1)
         }
 
+        # If station_col is provided, add a sorted list of unique station numbers to the entry
+        if station_col is not None:
+            entry['stations'] = sorted(group[station_col].unique())
+
+        distributions[group_name] = entry
+
     return distributions
+
+# Calling it:
+# # If we want to group by station number:
+# station_dists = create_distributions(df, group_col='station_number')
+# # If we want to group by region, and also include the station numbers in each region:
+# region_dists = create_distributions(df, group_col='region', station_col='station_number')
+
+def main():
+    # Example usage
+    distributions = create_distributions(df, group_col='station_number')
+
+    # Then generate scenarios
+    scenarios = create_scenarios(
+        station_ids   = [1, 2, 3],
+        num_scenarios = 1000,
+        distributions = distributions,
+        output_file   = 'scenarios.csv'
+    )
+   

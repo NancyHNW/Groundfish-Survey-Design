@@ -1,4 +1,5 @@
 # import limitedcatch.csv from ../gfsp_code/data/limitedcatch.csv
+# can probably delete this entire file 
 
 import pandas as pd
 import matplotlib.pyplot as plt
