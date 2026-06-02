@@ -501,13 +501,15 @@ class Boat:
         
 
 class Trip:
-    def __init__(self, start_port, stations=[], end_port=None, id=0):
+    def __init__(self, start_port, stations=None, end_port=None, id=0):
         self.start_port = start_port
         if end_port is None:
             self.end_port = start_port
         else:
             self.end_port = end_port
-        self.stations = stations
+        self.stations = list(stations) if stations is not None else []
+        self.nice_trip = []
+        self.actual_trip = []
         self.total_dist = 0
         self.total_catch = 0
         self.total_time = 0
