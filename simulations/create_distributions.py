@@ -92,7 +92,7 @@ def create_distributions(df,
 
 def main():
     # Example usage
-    distributions = create_distributions(df, group_col='station_number')
+    distributions = create_distributions(df, group_col='tow_station')
 
     # Then generate scenarios
     scenarios = create_scenarios(
@@ -101,4 +101,4 @@ def main():
         distributions = distributions,
         output_file   = 'scenarios.csv'
     )
-   
+    
