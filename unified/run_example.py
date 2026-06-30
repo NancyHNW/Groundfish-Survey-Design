@@ -16,7 +16,7 @@ import numpy as np
 
 from unified.loaders import load_gfsp_problem, load_heuristic_problem, list_gfsp_problems
 from unified.adapters import heuristic_context, to_heuristic_problem
-from unified.evaluate import evaluate_heuristic_solution, compare_results
+from unified.evaluate import evaluate_heuristic_solution, compare_results, solution_to_trips
 
 
 def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
@@ -143,6 +143,10 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
         result["iterations"] = iteration
         result["elapsed"] = time.time() - t0
         result["method"] = method
+        # return the trips too so the stochastic evaluator can reuse this solution
+        # (extract here while prob is still valid)
+        result["trips"] = solution_to_trips(prob)
+        result["instance"] = inst
 
         print(f"\n--- Final Result ---")
         print(f"Method: {method}")
