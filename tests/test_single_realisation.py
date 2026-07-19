@@ -241,11 +241,11 @@ def test_boat_id_capacity_mapping():
     print("PASS: boat capacity mapping\n")
 
 
-def test_visualise_real_problem():
-    """Solve a real gfsp problem and visualise one realisation with overflows.
+def test_visualise_real_problem(strategy="backtrack", preemptive_threshold=0.8, seed=None):
+    """Solve a real gfsp problem and visualise one realisation.
 
-    This uses the actual map data (Iceland coastline, real station positions).
-    Catch is faked to force some overflows so we can see the red X markers.
+    Uses real routes (GRASP + tabu) and real catch sampled from historical
+    spring survey distributions (via CatchSimulator).
     """
     from unified.loaders import load_gfsp_problem
     from unified.adapters import heuristic_context, to_heuristic_problem
@@ -253,7 +253,7 @@ def test_visualise_real_problem():
     from unified.stochastic_eval import evaluate_single_realisation, plot_realisation
 
     # Load a small test problem
-    inst = load_gfsp_problem(ns=20, nv=2, cf=62.5, instance=1)
+    inst = load_gfsp_problem(ns=40, nv=2, cf=62.5, instance=1)
     print(f"Loaded: {inst}")
 
     # record which solver steps ran so the filename reflects it
@@ -314,23 +314,19 @@ def test_visualise_real_problem():
               f"catch={t['catch']:.0f}, capacity={cap:.0f}")
         print(f"    station IDs: {station_ids}")
 
-    # Create fake catch that causes some overflows:
-    # Use real-ish baseline (~500 kg) but spike a few stations to force overflow
-    rng = np.random.default_rng(123)
-    catch = rng.uniform(300, 600, size=581)
-
-    # Spike some stations that are actually in the trips to guarantee overflows
-    for t in trips:
-        station_ords = _extract_station_ordinals(t["nodes"])
-        if len(station_ords) >= 3:
-            # Make the 3rd station very high to overflow
-            catch[station_ords[2]] = 2000.0
-            break  # just spike one trip
+    # Sample one catch scenario from historical distributions
+    from unified.stochastic_catch import CatchSimulator
+    sim = CatchSimulator(seed=seed)
+    sim.fit()
+    catch = sim.sample(n_scenarios=1)[0]
 
     # Evaluate
     tm = np.load(os.path.join(os.path.dirname(__file__), "..",
                               "final_code", "local data", "true_time.npy"))
-    result = evaluate_single_realisation(trips, inst, catch, time_matrix=tm)
+    print(f"\nStrategy: {strategy}")
+    result = evaluate_single_realisation(trips, inst, catch, time_matrix=tm,
+                                         strategy=strategy,
+                                         preemptive_threshold=preemptive_threshold)
 
     print(f"\nResult:")
     print(f"  capacity_exceeded: {result['capacity_exceeded']}")
@@ -349,12 +345,16 @@ def test_visualise_real_problem():
               f"actual={td['adjusted_time']:.1f}, "
               f"detour=+{td['detour_time']:.1f}{flag}")
 
-    solver_tag = "-".join(solver_steps)
+    solver_tag = "-".join(solver_steps) + f"-{strategy}"
 
     # Plot map
     save_path = plot_output_path("realisation", solver_tag, inst)
     plot_realisation(trips, inst, result, save_path=save_path)
     print(f"\nMap saved to {save_path}")
+
+    # Print catch table
+    from unified.stochastic_eval import print_catch_table
+    print_catch_table(trips, catch, inst)
 
     # Plot time comparison
     from unified.stochastic_eval import plot_time_comparison
@@ -511,6 +511,13 @@ if __name__ == "__main__":
                         help="Run the visualisation test with a real problem")
     parser.add_argument("--mc", action="store_true",
                         help="Run the Monte Carlo test with a real problem")
+    parser.add_argument("--strategy", default="backtrack",
+                        choices=["backtrack", "forward", "preemptive"],
+                        help="Overflow strategy (default: backtrack)")
+    parser.add_argument("--threshold", type=float, default=0.8,
+                        help="Preemptive return threshold, 0.0-1.0 (default: 0.8)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed for catch sampling (default: random)")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -542,9 +549,11 @@ if __name__ == "__main__":
 
     if args.plot:
         print("\n" + "=" * 60)
-        print("Running visualisation test on real problem...")
+        print(f"Running visualisation test (strategy={args.strategy})...")
         print("=" * 60 + "\n")
-        test_visualise_real_problem()
+        test_visualise_real_problem(strategy=args.strategy,
+                                    preemptive_threshold=args.threshold,
+                                    seed=args.seed)
 
     if args.mc:
         print("\n" + "=" * 60)
