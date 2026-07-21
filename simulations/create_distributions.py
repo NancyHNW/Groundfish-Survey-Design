@@ -43,7 +43,7 @@ def create_scenarios(station_ids, num_scenarios, distributions, output_file):
 # Function 2: Create distributions for each group in the DataFrame
 # =============
 def create_distributions(df,
-                         group_col='station_number',
+                         group_col='tow_station',
                          catch_col='catch',
                          station_col=None):
     """
@@ -51,7 +51,9 @@ def create_distributions(df,
 
     Inputs:
         df (pd.DataFrame): The input DataFrame containing the catch data.
-        group_col (str): The column to group by (typically 'station_number' or 'region').
+        group_col (str): The column to group by (typically 'tow_station' or 'quadrant').
+            i.e. if 'tow_station' is provided, the function will create a distribution for each unique station number.
+                 if 'quadrant' is provided, the function will create a distribution for each unique quadrant.
         catch_col (str): The column containing catch amounts.
         station_col (str | None): If provided, each group's entry will include a sorted
                                   list of unique station numbers under the 'stations' key.
@@ -86,9 +88,9 @@ def create_distributions(df,
 
 # Calling it:
 # # If we want to group by station number:
-# station_dists = create_distributions(df, group_col='station_number')
+# station_dists = create_distributions(df, group_col='tow_station')
 # # If we want to group by region, and also include the station numbers in each region:
-# region_dists = create_distributions(df, group_col='region', station_col='station_number')
+# region_dists = create_distributions(df, group_col='region', station_col='tow_station')
 
 def main():
     # Example usage
