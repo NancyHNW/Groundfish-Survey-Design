@@ -253,7 +253,7 @@ def test_visualise_real_problem(strategy="backtrack", preemptive_threshold=0.8, 
     from unified.stochastic_eval import evaluate_single_realisation, plot_realisation
 
     # Load a small test problem
-    inst = load_gfsp_problem(ns=40, nv=2, cf=62.5, instance=1)
+    inst = load_gfsp_problem(ns=100, nv=2, cf=62.5, instance=1)
     print(f"Loaded: {inst}")
 
     # record which solver steps ran so the filename reflects it
@@ -263,7 +263,7 @@ def test_visualise_real_problem(strategy="backtrack", preemptive_threshold=0.8, 
     with heuristic_context():
         from classes import Problem, Trip
         from neighbourhood_rules import tabu_search_combined
-        prob = to_heuristic_problem(inst, catch_source="gfsp")
+        prob = to_heuristic_problem(inst, catch_source="heuristic")
         prob.GRASP(rcl_size=2, seed=42)
         solver_steps.append("grasp")
 
@@ -440,7 +440,7 @@ def test_monte_carlo_all_overflow():
     print("PASS: Monte Carlo all overflow\n")
 
 
-def run_mc_comparison(methods=("grasp_only", "grasp", "tabu_swap"),
+def run_mc_comparison(methods=("grasp_only", "grasp_swap", "tabu_move"),
                       ns=20, nv=2, cf=62.5, instance=1,
                       time_limit=10, n_scenarios=500, scenario_seed=123):
     """Run Monte Carlo for several heuristics and compare them.
@@ -448,15 +448,31 @@ def run_mc_comparison(methods=("grasp_only", "grasp", "tabu_swap"),
     Solves the problem with each method, then evaluates all the solutions
     against the same scenarios (so the comparison is fair). One histogram
     per method. Returns {method: result}.
+
+    Method names used here map to run_heuristic_on_gfsp method names:
+        grasp_only  -> grasp_only  (construction only, no improvement)
+        grasp_swap  -> grasp       (GRASP + next-descent swap)
+        tabu_move   -> tabu_move   (GRASP + tabu search with moves)
     """
     from unified.run_example import run_heuristic_on_gfsp
     from unified.stochastic_eval import (StochasticEvaluator,
                                           print_stochastic_summary,
                                           plot_monte_carlo)
+    from unified.stochastic_catch import CatchSimulator
 
-    # same scenarios for every method (stand-in until Jess's simulator is ready)
-    rng = np.random.default_rng(scenario_seed)
-    scenarios = rng.lognormal(mean=5.5, sigma=0.8, size=(n_scenarios, 581))
+    # Map display names to solver method names
+    solver_method = {
+        "grasp_only": "grasp_only",
+        "grasp_swap": "grasp",
+        "tabu_move": "tabu_move",
+        "tabu_swap": "tabu_swap",
+        "sa": "sa",
+    }
+
+    # Generate shared scenarios from historical data so comparison is fair
+    sim = CatchSimulator(seed=scenario_seed)
+    sim.fit()
+    scenarios = sim.sample(n_scenarios=n_scenarios)
     evaluator = StochasticEvaluator(scenarios=scenarios)
 
     results = {}
@@ -465,7 +481,8 @@ def run_mc_comparison(methods=("grasp_only", "grasp", "tabu_swap"),
 
         # solve with this method (returns trips + instance now)
         det = run_heuristic_on_gfsp(ns=ns, nv=nv, cf=cf, instance=instance,
-                                    method=method, time_limit=time_limit)
+                                    method=solver_method.get(method, method),
+                                    time_limit=time_limit)
         trips = det["trips"]
         inst = det["instance"]
         print(f"Got {len(trips)} trips (deterministic obj={det['objective']:.1f})")
@@ -495,9 +512,12 @@ def run_mc_comparison(methods=("grasp_only", "grasp", "tabu_swap"),
 
 
 def test_monte_carlo_real_problem():
-    """Quick end-to-end run of the heuristic comparison (two methods)."""
-    results = run_mc_comparison(methods=("grasp_only", "grasp"), time_limit=10)
-    assert set(results) == {"grasp_only", "grasp"}
+    """Quick end-to-end run of the heuristic comparison (three methods)."""
+    results = run_mc_comparison(
+        methods=("grasp_only", "grasp_swap", "tabu_move"),
+        time_limit=10,
+    )
+    assert set(results) == {"grasp_only", "grasp_swap", "tabu_move"}
     for result in results.values():
         assert 0 <= result["p_capacity_exceedance"] <= 1
         assert result["worst_case_catch"].shape == (581,)

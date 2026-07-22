@@ -652,7 +652,14 @@ def _draw_routes(ax, solution_trips, nodes):
 
 
 def _draw_overflows(ax, result, nodes):
-    """Draw overflow markers and detour lines."""
+    """Draw overflow markers and detour lines.
+
+    Preemptive returns (threshold-triggered) are shown in orange with a
+    triangle marker; actual overflows are shown in red with an X marker.
+    """
+    drew_overflow = False
+    drew_preemptive = False
+
     for event in result["overflow_events"]:
         stn_node = event["station_node"]
         stn_lat = nodes[stn_node, 0]
@@ -661,18 +668,36 @@ def _draw_overflows(ax, result, nodes):
         port_lat = nodes[port_node, 0]
         port_lon = nodes[port_node, 1]
 
-        ax.scatter(stn_lon, stn_lat, color="red", marker="X", s=200,
-                   zorder=10, edgecolors="darkred", linewidths=1)
+        is_preemptive = event.get("preemptive", False)
+
+        if is_preemptive:
+            color = "#e040fb"
+            edge_color = "#aa00ff"
+            marker = "^"
+            label_prefix = "preemptive"
+            legend_label = "Preemptive return" if not drew_preemptive else None
+            drew_preemptive = True
+        else:
+            color = "red"
+            edge_color = "darkred"
+            marker = "X"
+            label_prefix = "overflow"
+            legend_label = "Overflow return" if not drew_overflow else None
+            drew_overflow = True
+
+        ax.scatter(stn_lon, stn_lat, color=color, marker=marker, s=200,
+                   zorder=10, edgecolors=edge_color, linewidths=1,
+                   label=legend_label)
 
         ax.plot([stn_lon, port_lon], [stn_lat, port_lat],
-                color="red", linewidth=2, linestyle="--", alpha=0.7, zorder=9)
+                color=color, linewidth=2, linestyle="--", alpha=0.7, zorder=9)
 
         ax.annotate(
-            f"overflow: {event['cumulative_catch']:.0f}/{event['capacity']:.0f} kg",
+            f"{label_prefix}: {event['cumulative_catch']:.0f}/{event['capacity']:.0f} kg",
             xy=(stn_lon, stn_lat), xytext=(10, 10),
             textcoords="offset points", fontsize=8,
-            color="red", fontweight="bold",
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.8),
+            color=color, fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=color, alpha=0.8),
         )
 
 
