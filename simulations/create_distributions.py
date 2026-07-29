@@ -96,11 +96,17 @@ def main():
     # Example usage
     distributions = create_distributions(df, group_col='tow_station')
 
+    # print("Distributions created for each station:")
+    # for station, dist in distributions.items():
+    #     print(f"Station {station}: Mean = {dist['mean']:.2f}, Std = {dist['std']:.2f}")
+
     # Then generate scenarios
-    scenarios = create_scenarios(
-        station_ids   = [1, 2, 3],
-        num_scenarios = 1000,
-        distributions = distributions,
-        output_file   = 'scenarios.csv'
-    )
-    
+    # scenarios = create_scenarios(
+    #     station_ids   = [1, 2, 3],
+    #     num_scenarios = 1000,
+    #     distributions = distributions,
+    #     output_file   = 'scenarios.csv'
+    # )
+
+if __name__ == '__main__':
+    main()
