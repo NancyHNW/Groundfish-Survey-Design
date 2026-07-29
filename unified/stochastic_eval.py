@@ -353,7 +353,8 @@ class StochasticEvaluator:
             raise ValueError("Provide either simulator or scenarios")
         self.seed = seed
 
-    def evaluate(self, solution_trips, instance):
+    def evaluate(self, solution_trips, instance, strategy="backtrack",
+                 preemptive_threshold=0.8):
         """Run n_simulations catch realisations against the fixed route.
 
         Parameters
@@ -362,6 +363,10 @@ class StochasticEvaluator:
             Trip dicts from evaluate.py's solution_to_trips().
         instance : ProblemInstance
             Problem parameters.
+        strategy : str
+            Overflow strategy: "backtrack", "forward", or "preemptive".
+        preemptive_threshold : float
+            Threshold for preemptive strategy (0.0-1.0).
 
         Returns
         -------
@@ -397,7 +402,8 @@ class StochasticEvaluator:
         for i in range(self.n_simulations):
             catch_vector = all_catch[i]
             result = evaluate_single_realisation(
-                solution_trips, instance, catch_vector, time_matrix=time_matrix
+                solution_trips, instance, catch_vector, time_matrix=time_matrix,
+                strategy=strategy, preemptive_threshold=preemptive_threshold
             )
             results.append(result)
 
