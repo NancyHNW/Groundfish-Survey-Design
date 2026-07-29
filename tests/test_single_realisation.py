@@ -253,7 +253,7 @@ def test_visualise_real_problem(strategy="backtrack", preemptive_threshold=0.8, 
     from unified.stochastic_eval import evaluate_single_realisation, plot_realisation
 
     # Load a small test problem
-    inst = load_gfsp_problem(ns=100, nv=2, cf=62.5, instance=1)
+    inst = load_gfsp_problem(ns=20, nv=2, cf=62.5, instance=1)
     print(f"Loaded: {inst}")
 
     # record which solver steps ran so the filename reflects it
@@ -263,7 +263,7 @@ def test_visualise_real_problem(strategy="backtrack", preemptive_threshold=0.8, 
     with heuristic_context():
         from classes import Problem, Trip
         from neighbourhood_rules import tabu_search_combined
-        prob = to_heuristic_problem(inst, catch_source="heuristic")
+        prob = to_heuristic_problem(inst, catch_source="historical")
         prob.GRASP(rcl_size=2, seed=42)
         solver_steps.append("grasp")
 
@@ -442,7 +442,8 @@ def test_monte_carlo_all_overflow():
 
 def run_mc_comparison(methods=("grasp_only", "grasp_swap", "tabu_move"),
                       ns=20, nv=2, cf=62.5, instance=1,
-                      time_limit=10, n_scenarios=500, scenario_seed=123):
+                      time_limit=120, n_scenarios=500, scenario_seed=123,
+                      catch_source="gfsp", strategy="backtrack"):
     """Run Monte Carlo for several heuristics and compare them.
 
     Solves the problem with each method, then evaluates all the solutions
@@ -482,13 +483,14 @@ def run_mc_comparison(methods=("grasp_only", "grasp_swap", "tabu_move"),
         # solve with this method (returns trips + instance now)
         det = run_heuristic_on_gfsp(ns=ns, nv=nv, cf=cf, instance=instance,
                                     method=solver_method.get(method, method),
-                                    time_limit=time_limit)
+                                    time_limit=time_limit,
+                                    catch_source=catch_source)
         trips = det["trips"]
         inst = det["instance"]
         print(f"Got {len(trips)} trips (deterministic obj={det['objective']:.1f})")
 
         # evaluate against the shared scenarios
-        result = evaluator.evaluate(trips, inst)
+        result = evaluator.evaluate(trips, inst, strategy=strategy)
         det_time = sum(t["total_time"] for t in trips)
         print_stochastic_summary(result, deterministic_time=det_time)
 
@@ -511,6 +513,75 @@ def run_mc_comparison(methods=("grasp_only", "grasp_swap", "tabu_move"),
     return results
 
 
+def run_strategy_comparison(ns=100, nv=2, cf=250, instance=1,
+                            time_limit=10, n_scenarios=500, scenario_seed=123,
+                            catch_source="historical", method="tabu_move"):
+    """Run a single method, then evaluate it under multiple overflow strategies."""
+    from unified.run_example import run_heuristic_on_gfsp
+    from unified.stochastic_eval import (StochasticEvaluator,
+                                          print_stochastic_summary)
+    from unified.stochastic_catch import CatchSimulator
+
+    solver_method = {
+        "grasp_only": "grasp_only",
+        "grasp_swap": "grasp",
+        "tabu_move": "tabu_move",
+    }
+
+    # Generate shared scenarios
+    sim = CatchSimulator(seed=scenario_seed)
+    sim.fit()
+    scenarios = sim.sample(n_scenarios=n_scenarios)
+    evaluator = StochasticEvaluator(scenarios=scenarios)
+
+    # Solve once
+    print(f"Solving with {method}...")
+    det = run_heuristic_on_gfsp(ns=ns, nv=nv, cf=cf, instance=instance,
+                                method=solver_method.get(method, method),
+                                time_limit=time_limit,
+                                catch_source=catch_source)
+    trips = det["trips"]
+    inst = det["instance"]
+    det_time = sum(t["total_time"] for t in trips)
+    print(f"Deterministic time: {det_time:.1f}h, {len(trips)} trips\n")
+
+    # Evaluate under each strategy
+    strategies = [
+        ("backtrack", "backtrack", 0.8),
+        ("forward", "forward", 0.8),
+        ("preemptive_0.8", "preemptive", 0.8),
+        ("preemptive_0.7", "preemptive", 0.7),
+    ]
+
+    print(f"{'strategy':<18}{'P(exceed)':>12}{'E[returns]':>12}"
+          f"{'mean penalty':>14}{'p95 penalty':>14}")
+    print("-" * 70)
+
+    for label, strat, threshold in strategies:
+        result = evaluator.evaluate(trips, inst, strategy=strat,
+                                     preemptive_threshold=threshold)
+        td = result["time_penalty_distribution"]
+        print(f"{label:<18}{result['p_capacity_exceedance']:>12.1%}"
+              f"{result['expected_unscheduled_returns']:>12.2f}"
+              f"{td['mean']:>14.1f}{td['p95']:>14.1f}")
+
+    # Threshold sweep
+    print(f"\n{'='*60}")
+    print("Preemptive threshold sweep")
+    print(f"{'='*60}")
+    print(f"{'alpha':<10}{'P(exceed)':>12}{'E[returns]':>12}"
+          f"{'mean penalty':>14}{'p95 penalty':>14}")
+    print("-" * 62)
+
+    for alpha in [0.5, 0.6, 0.7, 0.8, 0.9]:
+        result = evaluator.evaluate(trips, inst, strategy="preemptive",
+                                     preemptive_threshold=alpha)
+        td = result["time_penalty_distribution"]
+        print(f"{alpha:<10.1f}{result['p_capacity_exceedance']:>12.1%}"
+              f"{result['expected_unscheduled_returns']:>12.2f}"
+              f"{td['mean']:>14.1f}{td['p95']:>14.1f}")
+
+
 def test_monte_carlo_real_problem():
     """Quick end-to-end run of the heuristic comparison (three methods)."""
     results = run_mc_comparison(
@@ -530,7 +601,9 @@ if __name__ == "__main__":
     parser.add_argument("--plot", action="store_true",
                         help="Run the visualisation test with a real problem")
     parser.add_argument("--mc", action="store_true",
-                        help="Run the Monte Carlo test with a real problem")
+                        help="Run the Monte Carlo method comparison")
+    parser.add_argument("--sc", action="store_true",
+                        help="Run the strategy comparison + threshold sweep")
     parser.add_argument("--strategy", default="backtrack",
                         choices=["backtrack", "forward", "preemptive"],
                         help="Overflow strategy (default: backtrack)")
@@ -538,6 +611,13 @@ if __name__ == "__main__":
                         help="Preemptive return threshold, 0.0-1.0 (default: 0.8)")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for catch sampling (default: random)")
+    parser.add_argument("--catch-source", default="gfsp",
+                        choices=["gfsp", "heuristic", "historical"],
+                        help="Catch data for route planning (default: gfsp)")
+    parser.add_argument("--ns", type=int, default=20,
+                        help="Number of stations (default: 20)")
+    parser.add_argument("--cf", type=float, default=62.5,
+                        help="Capacity factor (default: 62.5)")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -577,6 +657,18 @@ if __name__ == "__main__":
 
     if args.mc:
         print("\n" + "=" * 60)
-        print("Running Monte Carlo test on real problem...")
+        print(f"Running Monte Carlo test (ns={args.ns}, cf={args.cf}, catch_source={args.catch_source})...")
         print("=" * 60 + "\n")
-        test_monte_carlo_real_problem()
+        run_mc_comparison(
+            ns=args.ns, cf=args.cf, catch_source=args.catch_source,
+            time_limit=10,
+        )
+
+    if args.sc:
+        print("\n" + "=" * 60)
+        print(f"Running strategy comparison (ns={args.ns}, cf={args.cf}, catch_source={args.catch_source})...")
+        print("=" * 60 + "\n")
+        run_strategy_comparison(
+            ns=args.ns, cf=args.cf, catch_source=args.catch_source,
+            time_limit=10,
+        )
