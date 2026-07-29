@@ -62,9 +62,10 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic"):
     ----------
     instance : ProblemInstance
     catch_source : str
-        Which catch data to use: "heuristic" (RandomMatchingCatches.dat) or
-        "gfsp" (LimitedCatch.csv).  Use "gfsp" when running heuristics
-        on gfsp test problems so that capacities are compatible.
+        Which catch data to use:
+        - "heuristic" (RandomMatchingCatches.dat, mean 859 kg)
+        - "gfsp" (LimitedCatch.csv, mean 531 kg)
+        - "historical" (historical station means from CatchSimulator, mean 812 kg)
 
     Returns
     -------
@@ -88,6 +89,10 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic"):
     if catch_source == "gfsp":
         _patch_catch_loader_gfsp()
         override_catch_data(prob)
+    elif catch_source == "historical":
+        hist_means = _load_historical_catch_array()
+        _patch_catch_loader_historical(hist_means)
+        override_catch_data(prob, catch_array=hist_means)
 
     return prob
 
@@ -128,7 +133,39 @@ def _patch_catch_loader_gfsp():
             mod.load_catch_fixed_random_assignment = patched_loader
 
 
-def override_catch_data(prob, catch_file=None):
+def _load_historical_catch_array():
+    """Load historical mean catch per station from CatchSimulator.
+
+    Returns a 1D numpy array of shape (581,) with the fitted mean catch
+    for each station ordinal.
+    """
+    from .stochastic_catch import CatchSimulator
+    sim = CatchSimulator()
+    sim.fit()
+    return sim.means
+
+
+def _patch_catch_loader_historical(historical_means=None):
+    """Monkey-patch the catch loader to use historical station means."""
+    import pandas as pd
+    if historical_means is None:
+        historical_means = _load_historical_catch_array()
+    catch_df = pd.DataFrame({"catch": historical_means})
+
+    def patched_loader():
+        return catch_df
+
+    import data_loader
+    data_loader.load_catch_fixed_random_assignment = patched_loader
+
+    for mod_name in ["classes", "neighbourhood_rules", "ant_colony_optimisation",
+                     "formulation_tester_functions"]:
+        mod = sys.modules.get(mod_name)
+        if mod and hasattr(mod, "load_catch_fixed_random_assignment"):
+            mod.load_catch_fixed_random_assignment = patched_loader
+
+
+def override_catch_data(prob, catch_file=None, catch_array=None):
     """Replace catch data in a heuristic Problem (and all its Boats/Trips).
 
     By default loads gfsp_code's LimitedCatch.csv.  This is needed when
@@ -140,8 +177,12 @@ def override_catch_data(prob, catch_file=None):
     prob : Problem (from final_code/classes.py)
     catch_file : str or None — path to a CSV with columns [station_number, catch].
                  If None, uses gfsp_code/data/LimitedCatch.csv.
+    catch_array : np.ndarray or None — pre-loaded catch array (shape 581,).
+                  If provided, catch_file is ignored.
     """
-    if catch_file is None:
+    if catch_array is not None:
+        pass  # use the provided array directly
+    elif catch_file is None:
         catch_array = _load_gfsp_catch_array().to_numpy().reshape(-1)
     else:
         import pandas as pd

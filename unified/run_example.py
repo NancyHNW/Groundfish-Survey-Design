@@ -20,7 +20,8 @@ from unified.evaluate import evaluate_heuristic_solution, compare_results, solut
 
 
 def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
-                          time_limit=10, seed=42, init="grasp"):
+                          time_limit=10, seed=42, init="grasp",
+                          catch_source="gfsp"):
     """Run heuristic solvers on a gfsp test problem.
 
     Parameters
@@ -31,6 +32,7 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
     seed : int — random seed
     init : str — "grasp" (probabilistic, may violate capacity) or
                  "greedy" (strict constraint enforcement)
+    catch_source : str — "gfsp", "heuristic", or "historical"
 
     Returns
     -------
@@ -51,9 +53,7 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
             simulated_annealing,
         )
 
-        # Use catch_source="gfsp" so capacities match the catch data
-        # the gfsp test problems were designed around
-        prob = to_heuristic_problem(inst, catch_source="gfsp")
+        prob = to_heuristic_problem(inst, catch_source=catch_source)
         print(f"Created Problem: {prob}")
 
         # Penalty parameters (same logic as final_testing_heur.py)

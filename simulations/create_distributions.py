@@ -2,8 +2,6 @@
 import numpy as np
 import pandas as pd
 
-df = pd.read_excel('data/spring_historical_english.xlsx')
-
 # =============
 # Function 1: Call the distribution function to create a set of scenarios, and write it to a file
 # =============
@@ -92,6 +90,7 @@ def create_distributions(df,
 
 def main():
     # Example usage
+    df = pd.read_excel('data/spring_historical_english.xlsx')
     distributions = create_distributions(df, group_col='tow_station')
 
     # Then generate scenarios

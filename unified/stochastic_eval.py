@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from .problem import ProblemInstance, N_PORTS
-from .evaluate import _load_time_matrix, _load_dist_matrix
+from .evaluate import _load_time_matrix
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
@@ -31,7 +31,8 @@ def _extract_station_ordinals(trip_nodes):
 
 
 def evaluate_single_realisation(solution_trips, instance, catch_vector,
-                                time_matrix=None):
+                                time_matrix=None, strategy="backtrack",
+                                preemptive_threshold=0.8):
     """Evaluate a routing solution under one catch realisation.
 
     Parameters
@@ -45,6 +46,17 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         Simulated catch per station ordinal for this realisation.
     time_matrix : np.ndarray, optional
         Pre-loaded time matrix (1175x1175). Loaded if not provided.
+    strategy : str
+        How to handle capacity overflow:
+        - "backtrack": go to nearest port, return to where you left off,
+          continue the planned route. (default)
+        - "forward": go to nearest port, then continue to the nearest
+          unvisited station from that port (no backtracking).
+        - "preemptive": return to nearest port when load reaches
+          preemptive_threshold fraction of capacity, before overflow.
+    preemptive_threshold : float
+        Fraction of capacity that triggers a preemptive return (0.0–1.0).
+        Only used when strategy="preemptive". Default 0.8.
 
     Returns
     -------
@@ -55,7 +67,12 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         total_time : float — total survey time (with detour penalties)
         trip_details : list[dict] — per-trip breakdown
         overflow_events : list[dict] — where each overflow happened
+        strategy : str — which strategy was used
     """
+    if strategy not in ("backtrack", "forward", "preemptive"):
+        raise ValueError(f"Unknown strategy: {strategy!r}. "
+                         f"Use 'backtrack', 'forward', or 'preemptive'.")
+
     if time_matrix is None:
         time_matrix = _load_time_matrix()
 
@@ -92,38 +109,29 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
             station_ordinals.append(_node_to_station(non_port[i]))
             station_nodes.append(non_port[i])
 
-        # Walk through stations, accumulating catch and recording overflows
-        cumulative_catch = 0.0
-        trip_exceeded = False
-        trip_unscheduled = 0
-        detour_time = 0.0
+        if strategy == "forward":
+            detour_time = _walk_forward(
+                station_ordinals, station_nodes, catch_vector,
+                boat_capacity, port_nodes, time_matrix,
+                trip_idx, boat_id, overflow_events,
+            )
+        elif strategy == "preemptive":
+            detour_time = _walk_preemptive(
+                station_ordinals, station_nodes, catch_vector,
+                boat_capacity, preemptive_threshold, port_nodes, time_matrix,
+                trip_idx, boat_id, overflow_events,
+            )
+        else:  # backtrack
+            detour_time = _walk_backtrack(
+                station_ordinals, station_nodes, catch_vector,
+                boat_capacity, port_nodes, time_matrix,
+                trip_idx, boat_id, overflow_events,
+            )
 
-        for i, stn in enumerate(station_ordinals):
-            cumulative_catch += catch_vector[stn]
-            if cumulative_catch > boat_capacity:
-                trip_exceeded = True
-                trip_unscheduled += 1
-
-                # Find nearest port
-                stn_node = station_nodes[i]
-                nearest_port, return_time = _find_nearest_port(
-                    stn_node, port_nodes, time_matrix
-                )
-                detour_time += 2 * return_time
-
-                overflow_events.append({
-                    "trip_idx": trip_idx,
-                    "boat_id": boat_id,
-                    "station_ordinal": stn,
-                    "station_node": stn_node,
-                    "cumulative_catch": cumulative_catch,
-                    "capacity": boat_capacity,
-                    "nearest_port": nearest_port,
-                    "detour_time": 2 * return_time,
-                })
-
-                # Offload at port and continue
-                cumulative_catch = 0.0
+        trip_exceeded = detour_time > 0
+        trip_unscheduled = sum(
+            1 for e in overflow_events if e["trip_idx"] == trip_idx
+        )
 
         trip_fish_time = trip["fish_time"]
         adjusted_time = trip["total_time"] + detour_time
@@ -157,7 +165,138 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         "time_penalty": total_time - original_total_time,
         "trip_details": trip_details,
         "overflow_events": overflow_events,
+        "strategy": strategy,
     }
+
+
+# ---------------------------------------------------------------------------
+# Strategy implementations
+# ---------------------------------------------------------------------------
+
+def _walk_backtrack(station_ordinals, station_nodes, catch_vector,
+                    boat_capacity, port_nodes, time_matrix,
+                    trip_idx, boat_id, overflow_events):
+    """Original strategy: nearest port, then backtrack to resume the route."""
+    cumulative_catch = 0.0
+    detour_time = 0.0
+
+    for i, stn in enumerate(station_ordinals):
+        cumulative_catch += catch_vector[stn]
+        if cumulative_catch > boat_capacity:
+            stn_node = station_nodes[i]
+            nearest_port, return_time = _find_nearest_port(
+                stn_node, port_nodes, time_matrix
+            )
+            detour = 2 * return_time  # go to port and come back
+            detour_time += detour
+
+            overflow_events.append({
+                "trip_idx": trip_idx,
+                "boat_id": boat_id,
+                "station_ordinal": stn,
+                "station_node": stn_node,
+                "cumulative_catch": cumulative_catch,
+                "capacity": boat_capacity,
+                "nearest_port": nearest_port,
+                "detour_time": detour,
+            })
+            cumulative_catch = 0.0
+
+    return detour_time
+
+
+def _walk_forward(station_ordinals, station_nodes, catch_vector,
+                  boat_capacity, port_nodes, time_matrix,
+                  trip_idx, boat_id, overflow_events):
+    """Forward strategy: nearest port, then continue to nearest unvisited
+    station from that port instead of backtracking.
+
+    Detour cost = time(overflow_station -> port) + time(port -> next_station)
+                  - time(overflow_station -> next_station)
+    i.e. the extra time compared to going directly to the next station.
+    """
+    cumulative_catch = 0.0
+    detour_time = 0.0
+    n_stations = len(station_ordinals)
+
+    for i, stn in enumerate(station_ordinals):
+        cumulative_catch += catch_vector[stn]
+        if cumulative_catch > boat_capacity:
+            stn_node = station_nodes[i]
+            nearest_port, time_to_port = _find_nearest_port(
+                stn_node, port_nodes, time_matrix
+            )
+
+            if i + 1 < n_stations:
+                # There's a next station — compute the forward detour
+                next_node = station_nodes[i + 1]
+                direct_time = time_matrix[stn_node, next_node]
+                via_port_time = (time_to_port +
+                                 time_matrix[nearest_port, next_node])
+                detour = via_port_time - direct_time
+            else:
+                # Last station in trip — just go to port and back
+                # (same as backtrack for the final station)
+                detour = 2 * time_to_port
+
+            detour_time += detour
+
+            overflow_events.append({
+                "trip_idx": trip_idx,
+                "boat_id": boat_id,
+                "station_ordinal": stn,
+                "station_node": stn_node,
+                "cumulative_catch": cumulative_catch,
+                "capacity": boat_capacity,
+                "nearest_port": nearest_port,
+                "detour_time": detour,
+            })
+            cumulative_catch = 0.0
+
+    return detour_time
+
+
+def _walk_preemptive(station_ordinals, station_nodes, catch_vector,
+                     boat_capacity, threshold, port_nodes, time_matrix,
+                     trip_idx, boat_id, overflow_events):
+    """Preemptive strategy: return to port when load reaches threshold
+    fraction of capacity, before overflow actually happens.
+
+    Uses backtrack-style detour (nearest port, return to same spot).
+    """
+    cumulative_catch = 0.0
+    detour_time = 0.0
+    trigger_level = boat_capacity * threshold
+
+    for i, stn in enumerate(station_ordinals):
+        cumulative_catch += catch_vector[stn]
+
+        # Check if we've hit the threshold OR actually overflowed
+        exceeded = cumulative_catch > boat_capacity
+        preemptive = (not exceeded) and (cumulative_catch >= trigger_level)
+
+        if exceeded or preemptive:
+            stn_node = station_nodes[i]
+            nearest_port, return_time = _find_nearest_port(
+                stn_node, port_nodes, time_matrix
+            )
+            detour = 2 * return_time
+            detour_time += detour
+
+            overflow_events.append({
+                "trip_idx": trip_idx,
+                "boat_id": boat_id,
+                "station_ordinal": stn,
+                "station_node": stn_node,
+                "cumulative_catch": cumulative_catch,
+                "capacity": boat_capacity,
+                "nearest_port": nearest_port,
+                "detour_time": detour,
+                "preemptive": preemptive,
+            })
+            cumulative_catch = 0.0
+
+    return detour_time
 
 
 def _find_nearest_port(station_node, port_nodes, time_matrix):
@@ -214,7 +353,8 @@ class StochasticEvaluator:
             raise ValueError("Provide either simulator or scenarios")
         self.seed = seed
 
-    def evaluate(self, solution_trips, instance):
+    def evaluate(self, solution_trips, instance, strategy="backtrack",
+                 preemptive_threshold=0.8):
         """Run n_simulations catch realisations against the fixed route.
 
         Parameters
@@ -223,6 +363,10 @@ class StochasticEvaluator:
             Trip dicts from evaluate.py's solution_to_trips().
         instance : ProblemInstance
             Problem parameters.
+        strategy : str
+            Overflow strategy: "backtrack", "forward", or "preemptive".
+        preemptive_threshold : float
+            Threshold for preemptive strategy (0.0-1.0).
 
         Returns
         -------
@@ -258,7 +402,8 @@ class StochasticEvaluator:
         for i in range(self.n_simulations):
             catch_vector = all_catch[i]
             result = evaluate_single_realisation(
-                solution_trips, instance, catch_vector, time_matrix=time_matrix
+                solution_trips, instance, catch_vector, time_matrix=time_matrix,
+                strategy=strategy, preemptive_threshold=preemptive_threshold
             )
             results.append(result)
 
@@ -310,18 +455,10 @@ class StochasticEvaluator:
         The simulator handles its own seeding (set in its constructor).
         """
         all_catch = self.simulator.sample(
-            instance.station_ids, n_samples=self.n_simulations
+            n_scenarios=self.n_simulations,
+            station_ids=instance.station_ids,
         )
-        # Simulator returns (n_samples, len(station_ids)) — we need (n_samples, 581)
-        # Map back to full 581-station vectors
-        n_stations_total = 581
-        if all_catch.shape[1] == n_stations_total:
-            return all_catch
-        # If simulator only returned for selected stations, embed into full vector
-        full = np.zeros((self.n_simulations, n_stations_total))
-        for i, sid in enumerate(instance.station_ids):
-            full[:, sid] = all_catch[:, i]
-        return full
+        return all_catch
 
 
 def print_stochastic_summary(stoch_result, deterministic_time=None):
@@ -397,7 +534,6 @@ def plot_monte_carlo(stoch_result, save_path=None, deterministic_time=None,
 
     # --- Left: total time histogram ---
     ax1.hist(total_times, bins=40, color="#4C72B0", alpha=0.8, edgecolor="white")
-    # predicted time the route was planned for, to compare vs the simulated spread
     if deterministic_time is not None:
         ax1.axvline(deterministic_time, color="green", linestyle="-", linewidth=2.5,
                     label=f"Predicted: {deterministic_time:.1f}")
@@ -483,15 +619,99 @@ def _load_island():
     return np.vstack((landata[:half], -landata[half:])).T
 
 
-def plot_realisation(solution_trips, instance, result, save_path=None):
-    """Plot a route map showing where capacity was exceeded.
+def _draw_base_map(ax, nodes, n_ports, island, instance):
+    """Draw the shared base layer: coastline, tow lines, ports."""
+    ax.plot(island[:, 1], island[:, 0], color="grey", linewidth=0.5)
 
-    Shows:
-    - Iceland coastline
-    - Ports as green dots
-    - Station tow lines in grey
-    - Trip routes coloured by boat
-    - Overflow stations as large red X markers with detour lines to nearest port
+    for s in instance.station_ids:
+        n1 = s * 2 + n_ports
+        n2 = s * 2 + n_ports + 1
+        ax.plot([nodes[n1, 1], nodes[n2, 1]],
+                [nodes[n1, 0], nodes[n2, 0]],
+                color="#cccccc", linewidth=1, alpha=0.5)
+
+    for p in instance.port_ids:
+        ax.scatter(nodes[p, 1], nodes[p, 0],
+                   c="#22A884", marker="o", s=80, zorder=5)
+
+
+def _draw_routes(ax, solution_trips, nodes):
+    """Draw trip routes coloured by boat."""
+    boat_colors = list(mcolors.TABLEAU_COLORS.values())
+    trip_styles = ["-", "--", ":", "-."]
+    for trip_idx, trip in enumerate(solution_trips):
+        trip_nodes = trip["nodes"]
+        boat_id = trip["boat_id"]
+        color = boat_colors[boat_id % len(boat_colors)]
+        style = trip_styles[trip_idx % len(trip_styles)]
+
+        lats = [nodes[n, 0] for n in trip_nodes]
+        lons = [nodes[n, 1] for n in trip_nodes]
+        ax.plot(lons, lats, color=color, linewidth=1.5, linestyle=style,
+                alpha=0.8, label=f"Boat {boat_id}, Trip {trip_idx}")
+
+        non_port = [n for n in trip_nodes if n >= N_PORTS]
+        for i in range(0, len(non_port), 2):
+            mid_lat = (nodes[non_port[i], 0] + nodes[non_port[i+1], 0]) / 2
+            mid_lon = (nodes[non_port[i], 1] + nodes[non_port[i+1], 1]) / 2
+            ax.scatter(mid_lon, mid_lat, color=color, s=30, zorder=4, alpha=0.7)
+
+
+def _draw_overflows(ax, result, nodes):
+    """Draw overflow markers and detour lines.
+
+    Preemptive returns (threshold-triggered) are shown in orange with a
+    triangle marker; actual overflows are shown in red with an X marker.
+    """
+    drew_overflow = False
+    drew_preemptive = False
+
+    for event in result["overflow_events"]:
+        stn_node = event["station_node"]
+        stn_lat = nodes[stn_node, 0]
+        stn_lon = nodes[stn_node, 1]
+        port_node = event["nearest_port"]
+        port_lat = nodes[port_node, 0]
+        port_lon = nodes[port_node, 1]
+
+        is_preemptive = event.get("preemptive", False)
+
+        if is_preemptive:
+            color = "#e040fb"
+            edge_color = "#aa00ff"
+            marker = "^"
+            label_prefix = "preemptive"
+            legend_label = "Preemptive return" if not drew_preemptive else None
+            drew_preemptive = True
+        else:
+            color = "red"
+            edge_color = "darkred"
+            marker = "X"
+            label_prefix = "overflow"
+            legend_label = "Overflow return" if not drew_overflow else None
+            drew_overflow = True
+
+        ax.scatter(stn_lon, stn_lat, color=color, marker=marker, s=200,
+                   zorder=10, edgecolors=edge_color, linewidths=1,
+                   label=legend_label)
+
+        ax.plot([stn_lon, port_lon], [stn_lat, port_lat],
+                color=color, linewidth=2, linestyle="--", alpha=0.7, zorder=9)
+
+        ax.annotate(
+            f"{label_prefix}: {event['cumulative_catch']:.0f}/{event['capacity']:.0f} kg",
+            xy=(stn_lon, stn_lat), xytext=(10, 10),
+            textcoords="offset points", fontsize=8,
+            color=color, fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=color, alpha=0.8),
+        )
+
+
+def plot_realisation(solution_trips, instance, result, save_path=None):
+    """Side-by-side map: planned route (left) vs simulated route (right).
+
+    Left panel shows the clean planned route with no overflows.
+    Right panel shows the same route with overflow markers and detour lines.
 
     Parameters
     ----------
@@ -507,80 +727,40 @@ def plot_realisation(solution_trips, instance, result, save_path=None):
     nodes, n_ports, n_stations = _load_nodes()
     island = _load_island()
 
-    fig, ax = plt.subplots(figsize=(16, 10))
+    fig, (ax_plan, ax_sim) = plt.subplots(1, 2, figsize=(28, 10))
 
-    # Iceland outline
-    ax.plot(island[:, 1], island[:, 0], color="grey", linewidth=0.5)
+    # --- Left: planned route ---
+    _draw_base_map(ax_plan, nodes, n_ports, island, instance)
+    _draw_routes(ax_plan, solution_trips, nodes)
+    ax_plan.set_xlabel("Longitude")
+    ax_plan.set_ylabel("Latitude")
+    ax_plan.set_title(f"Planned Route — total time: {result['original_total_time']:.1f}")
+    ax_plan.legend(loc="lower right", fontsize=8)
 
-    # All stations as faint tow lines
-    for s in instance.station_ids:
-        n1 = s * 2 + n_ports
-        n2 = s * 2 + n_ports + 1
-        ax.plot([nodes[n1, 1], nodes[n2, 1]],
-                [nodes[n1, 0], nodes[n2, 0]],
-                color="#cccccc", linewidth=1, alpha=0.5)
+    # --- Right: simulated route with overflows ---
+    _draw_base_map(ax_sim, nodes, n_ports, island, instance)
+    _draw_routes(ax_sim, solution_trips, nodes)
+    _draw_overflows(ax_sim, result, nodes)
+    ax_sim.set_xlabel("Longitude")
+    ax_sim.set_ylabel("Latitude")
 
-    # Ports
-    for p in instance.port_ids:
-        ax.scatter(nodes[p, 1], nodes[p, 0],
-                   c="#22A884", marker="o", s=80, zorder=5)
-
-    # Trip routes — coloured by boat
-    boat_colors = list(mcolors.TABLEAU_COLORS.values())
-    trip_styles = ["-", "--", ":", "-."]
-    for trip_idx, trip in enumerate(solution_trips):
-        trip_nodes = trip["nodes"]
-        boat_id = trip["boat_id"]
-        color = boat_colors[boat_id % len(boat_colors)]
-        style = trip_styles[trip_idx % len(trip_styles)]
-
-        lats = [nodes[n, 0] for n in trip_nodes]
-        lons = [nodes[n, 1] for n in trip_nodes]
-        ax.plot(lons, lats, color=color, linewidth=1.5, linestyle=style,
-                alpha=0.8, label=f"Boat {boat_id}, Trip {trip_idx}")
-
-        # Mark visited stations with coloured dots
-        non_port = [n for n in trip_nodes if n >= N_PORTS]
-        for i in range(0, len(non_port), 2):
-            mid_lat = (nodes[non_port[i], 0] + nodes[non_port[i+1], 0]) / 2
-            mid_lon = (nodes[non_port[i], 1] + nodes[non_port[i+1], 1]) / 2
-            ax.scatter(mid_lon, mid_lat, color=color, s=30, zorder=4, alpha=0.7)
-
-    # Overflow events — big red X + dashed line to nearest port
-    for event in result["overflow_events"]:
-        stn_node = event["station_node"]
-        stn_lat = nodes[stn_node, 0]
-        stn_lon = nodes[stn_node, 1]
-        port_node = event["nearest_port"]
-        port_lat = nodes[port_node, 0]
-        port_lon = nodes[port_node, 1]
-
-        # Red X at overflow station
-        ax.scatter(stn_lon, stn_lat, color="red", marker="X", s=200,
-                   zorder=10, edgecolors="darkred", linewidths=1)
-
-        # Dashed red line to nearest port (the detour)
-        ax.plot([stn_lon, port_lon], [stn_lat, port_lat],
-                color="red", linewidth=2, linestyle="--", alpha=0.7, zorder=9)
-
-        # Annotation
-        ax.annotate(
-            f"overflow: {event['cumulative_catch']:.0f}/{event['capacity']:.0f} kg",
-            xy=(stn_lon, stn_lat), xytext=(10, 10),
-            textcoords="offset points", fontsize=8,
-            color="red", fontweight="bold",
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.8),
-        )
-
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    title = (f"Stochastic Realisation — "
+    strategy_label = result.get("strategy", "backtrack")
+    title = (f"Simulated ({strategy_label}) — "
              f"{result['n_unscheduled_returns']} overflow(s), "
-             f"planned time: {result['original_total_time']:.1f}, "
              f"actual time: {result['total_time']:.1f} "
              f"(+{result['time_penalty']:.1f})")
-    ax.set_title(title)
-    ax.legend(loc="lower right", fontsize=8)
+    ax_sim.set_title(title)
+    ax_sim.legend(loc="lower right", fontsize=8)
+
+    # Match axis limits so the two maps are directly comparable
+    xlim = (min(ax_plan.get_xlim()[0], ax_sim.get_xlim()[0]),
+            max(ax_plan.get_xlim()[1], ax_sim.get_xlim()[1]))
+    ylim = (min(ax_plan.get_ylim()[0], ax_sim.get_ylim()[0]),
+            max(ax_plan.get_ylim()[1], ax_sim.get_ylim()[1]))
+    ax_plan.set_xlim(xlim)
+    ax_plan.set_ylim(ylim)
+    ax_sim.set_xlim(xlim)
+    ax_sim.set_ylim(ylim)
 
     plt.tight_layout()
     if save_path:
@@ -589,6 +769,48 @@ def plot_realisation(solution_trips, instance, result, save_path=None):
     else:
         plt.show()
     plt.close(fig)
+
+
+def print_catch_table(solution_trips, catch_vector, instance):
+    """Print a table of simulated catch per station in visit order.
+
+    Labels each station as (boat, trip, letter) where the letter indicates
+    visit order within that trip (a=first, b=second, ...).
+
+    Parameters
+    ----------
+    solution_trips : list[dict]
+        The trip dicts (with 'nodes', 'boat_id').
+    catch_vector : np.ndarray, shape (581,)
+        Simulated catch per station ordinal.
+    instance : ProblemInstance
+        Problem instance (for capacities).
+    """
+    unique_bids = sorted(set(t["boat_id"] for t in solution_trips))
+    bid_to_idx = {bid: i for i, bid in enumerate(unique_bids)}
+    trip_counter = {}
+
+    print(f"\n{'Label':<10} {'Station':<10} {'Catch (kg)':<12} {'Cumulative':<12} {'Capacity':<10}")
+    print("-" * 54)
+
+    for trip in solution_trips:
+        boat_id = trip["boat_id"]
+        trip_idx = trip_counter.get(boat_id, 0)
+        trip_counter[boat_id] = trip_idx + 1
+        capacity = instance.capacities[bid_to_idx[boat_id]]
+
+        station_ords = _extract_station_ordinals(trip["nodes"])
+        cumulative = 0.0
+
+        for i, stn in enumerate(station_ords):
+            letter = chr(ord('a') + i) if i < 26 else str(i)
+            label = f"{boat_id},{trip_idx},{letter}"
+            catch = catch_vector[stn]
+            cumulative += catch
+            flag = " ***" if cumulative > capacity else ""
+            print(f"{label:<10} {stn:<10} {catch:<12.1f} {cumulative:<12.1f} {capacity:<10.0f}{flag}")
+
+        print()
 
 
 def plot_time_comparison(solution_trips, result, save_path=None):
