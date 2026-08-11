@@ -1,0 +1,478 @@
+---
+title: "Groundfish Survey Design DA"
+author: "Jessica Zeng"
+date: "2026-08-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r}
+install.packages("readxl")
+library(readxl)
+
+install.packages("corrplot")
+library(corrplot)
+```
+```{r}
+# install.packages("doBy")
+# install.packages("pbkrtest")
+# install.packages("car")
+# 
+# library(car)
+```
+
+## Data Analysis
+
+```{r}
+# Read in data
+df <- read_excel("spring_historical_english.xlsx")
+```
+
+```{r}
+str(df)
+summary(df)
+```
+Look at how many unique variables there are
+```{r}
+sapply(df, function(x) length(unique(x)))
+```
+
+Remove useless prediction variables
+```{r}
+df_model_general <- df[, !names(df) %in% c(
+  "mission_id",
+  "mission_name",
+  "station_id",
+  "station_type",
+  "station_number",
+  "date",
+  "cast_latitude_DMS",
+  "cast_longitude_DMS",
+  "haul_latitude_DMS",
+  "haul_longitude_DMS",
+  "sample_id",
+  "londunarhofn_nr",
+  "name",
+  "month",
+  "region",
+  "sub_region",
+  "gear_number",
+  "gear_name",
+  "sample_category",
+  "trawl_number",
+  "trawl_start",
+  "trawl_end",
+  "fishing_grounds",
+  "einkst",
+  "einknr",
+  "flokkur",
+  "heimah",
+  "current_dir",
+  "current_speed",
+  "ocean_state",
+  "brl"
+)]
+```
+
+NOTE: we will remove tow_station in the future, as it is less of a predictor variable, and more of a grouping variable. We will factor this in later.
+
+```{r}
+str(df_model_general)
+```
+Remaining variables:
+year
+cast_latitude
+cast_longitude
+haul_latitude
+haul_longitude
+depth_cast
+depth_haul
+ship_number
+wind_speed
+wind_direction
+weather
+cloud
+sea_state
+bottom_temp
+air_temp
+barometer
+trawl_speed
+trawl_length
+trawl_bearing
+trawl_time
+catch
+tow_station
+quadrant
+
+## Exploration
+### Numerical variables
+```{r}
+plot_catch_relationship <- function(variable, data) {
+  
+  plot(data[[variable]], data$catch,
+       main = paste("Catch vs", variable),
+       xlab = variable,
+       ylab = "Catch (kg)",
+       pch = 19)
+  
+  abline(lm(data$catch ~ data[[variable]]),
+         lwd = 2)
+}
+```
+
+```{r}
+plot_catch_relationship("year", df_model_general)
+plot_catch_relationship("depth_cast", df_model_general)
+plot_catch_relationship("depth_haul", df_model_general)
+plot_catch_relationship("cast_latitude", df_model_general)
+plot_catch_relationship("cast_longitude", df_model_general)
+plot_catch_relationship("haul_latitude", df_model_general)
+plot_catch_relationship("haul_longitude", df_model_general)
+plot_catch_relationship("bottom_temp", df_model_general)
+plot_catch_relationship("surface_temp", df_model_general)
+plot_catch_relationship("air_temp", df_model_general)
+plot_catch_relationship("barometer", df_model_general)
+plot_catch_relationship("wind_speed", df_model_general)
+plot_catch_relationship("trawl_speed", df_model_general)
+plot_catch_relationship("trawl_length", df_model_general)
+plot_catch_relationship("trawl_time", df_model_general)
+plot_catch_relationship("trawl_bearing", df_model_general)
+```
+
+### Categorical variables
+```{r}
+# Convert categorical variables to factors
+df_model_general$ship_number <- as.factor(df_model_general$ship_number)
+df_model_general$quadrant <- as.factor(df_model_general$quadrant)
+df_model_general$weather <- as.factor(df_model_general$weather)
+df_model_general$cloud <- as.factor(df_model_general$cloud)
+df_model_general$sea_state <- as.factor(df_model_general$sea_state)
+```
+
+```{r}
+# Catch by quadrant
+boxplot(catch ~ quadrant,
+        data = df_model_general,
+        main = "Catch by Quadrant",
+        xlab = "Quadrant",
+        ylab = "Catch (kg)")
+# Catch by ship
+boxplot(catch ~ ship_number,
+        data = df_model_general,
+        main = "Catch by Ship",
+        xlab = "Ship Number",
+        ylab = "Catch (kg)")
+# Catch by weather condition
+boxplot(catch ~ weather,
+        data = df_model_general,
+        main = "Catch by Weather",
+        xlab = "Weather",
+        ylab = "Catch (kg)")
+# Catch by cloud condition
+boxplot(catch ~ cloud,
+        data = df_model_general,
+        main = "Catch by Cloud Condition",
+        xlab = "Cloud",
+        ylab = "Catch (kg)")
+# Catch by sea state
+boxplot(catch ~ sea_state,
+        data = df_model_general,
+        main = "Catch by Sea State",
+        xlab = "Sea State",
+        ylab = "Catch (kg)")
+```
+
+
+## Preliminary model
+```{r}
+# Variables for preliminary model
+df_prelim <- df_model_general[, c(
+  "year",
+  "cast_latitude",
+  "cast_longitude",
+  "haul_latitude",
+  "haul_longitude",
+  "depth_cast",
+  "depth_haul",
+  "ship_number",
+  "wind_speed",
+  "wind_direction",
+  "weather",
+  "cloud",
+  "sea_state",
+  "bottom_temp",
+  "air_temp",
+  "barometer",
+  "trawl_speed",
+  "trawl_length",
+  "trawl_bearing",
+  "trawl_time",
+  "catch",
+  "tow_station",
+  "quadrant"
+)]
+```
+
+Treat as categorical variables
+```{r}
+df_prelim$ship_number <- as.factor(df_prelim$ship_number)
+df_prelim$weather <- as.factor(df_prelim$weather)
+df_prelim$cloud <- as.factor(df_prelim$cloud)
+df_prelim$sea_state <- as.factor(df_prelim$sea_state)
+df_prelim$quadrant <- as.factor(df_prelim$quadrant)
+```
+
+### Examine catch
+```{r}
+# Raw catch
+hist(df_prelim$catch,
+     breaks = 50,
+     main = "Distribution of Raw Catch",
+     xlab = "Catch (kg)")
+
+# Log-transformed catch
+df_prelim$log_catch <- log(df_prelim$catch)
+
+hist(df_prelim$log_catch,
+     breaks = 50,
+     main = "Distribution of Log(Catch)",
+     xlab = "Log(Catch)")
+```
+
+### Examine trawl variables
+```{r}
+#Correlation matrix
+trawl_cor <- cor(
+  df_prelim[, c(
+    "trawl_speed",
+    "trawl_length",
+    "trawl_time"
+  )],
+  use = "pairwise.complete.obs"
+)
+
+round(trawl_cor, 3)
+```
+There is essentially no linear correlation between trawl_speed and trawl_length (r=0.055)
+
+There is a moderate negative relationship between trawl_speed and trawl_time (r=-0.483)
+
+There is a strong positive relationship between trawl_length and trawl_time (r=0.768)
+
+
+Look into relationship between length & time
+```{r}
+plot(
+  df_prelim$trawl_length,
+  df_prelim$trawl_time,
+  main = "Trawl Length vs Trawl Time",
+  xlab = "Trawl Length",
+  ylab = "Trawl Time",
+  pch = 19
+)
+
+abline(
+  lm(trawl_time ~ trawl_length,
+     data = df_prelim),
+  lwd = 2
+)
+```
+
+
+### Look into correlations between numerical variables
+```{r}
+numeric_vars <- df_prelim[, c(
+  "year",
+  "cast_latitude",
+  "cast_longitude",
+  "haul_latitude",
+  "haul_longitude",
+  "depth_cast",
+  "depth_haul",
+  "wind_speed",
+  "wind_direction",
+  "bottom_temp",
+  "air_temp",
+  "barometer",
+  "trawl_speed",
+  "trawl_length",
+  "trawl_bearing",
+  "trawl_time"
+)]
+
+cor_matrix <- cor(
+  numeric_vars,
+  use = "pairwise.complete.obs"
+)
+
+round(cor_matrix, 2)
+
+corrplot(
+  cor_matrix,
+  method = "circle",
+  type = "upper",
+  tl.col = "black",
+  tl.srt = 45
+)
+```
+
+```{r}
+preliminary_model <- lm(
+  log_catch ~
+    year +
+    cast_latitude +
+    cast_longitude +
+    haul_latitude +
+    haul_longitude +
+    depth_cast +
+    depth_haul +
+    ship_number +
+    wind_speed +
+    wind_direction +
+    weather +
+    cloud +
+    sea_state +
+    bottom_temp +
+    air_temp +
+    barometer +
+    trawl_speed +
+    trawl_length +
+    trawl_bearing +
+    trawl_time +
+    quadrant,
+  data = df_prelim
+)
+
+summary(preliminary_model)
+```
+
+### Check multi collinearity (VIF)
+car library not working, make own vif function:
+```{r}
+# Calculate VIF for each numerical predictor
+calculate_vif <- function(model) {
+  
+  # Get the model matrix
+  X <- model.matrix(model)[, -1]
+  
+  # Calculate VIF for each column
+  vif_values <- numeric(ncol(X))
+  names(vif_values) <- colnames(X)
+  
+  for (i in seq_along(vif_values)) {
+    
+    other_vars <- X[, -i, drop = FALSE]
+    target <- X[, i]
+    
+    auxiliary_model <- lm(target ~ other_vars)
+    
+    R2 <- summary(auxiliary_model)$r.squared
+    
+    vif_values[i] <- 1 / (1 - R2)
+  }
+  
+  return(vif_values)
+}
+```
+
+```{r}
+vif_values <- calculate_vif(preliminary_model)
+round(vif_values, 2)
+```
+
+Rough interpretation of VIF
+VIF 1-2, little concern
+VIF 2-5, moderate
+VIF 5-10, high
+VIF >10 Very high
+
+Can remove cast_latitude, cast_longitude as they are highly correlated with haul_latitude, haul_longitude.
+
+Can remove depth_cast as similar to depth_haul 
+
+Even though fround before that trawl speed, time and length are their own variables, the VIF finds speed and time redundant relative to the other trawl variables. Therefore we will remove trawl_speed and trawl_time
+
+Remove quadrant too as it was created from the latitude and longitude variables. This variable may be useful for more simpler models, but not for this multilinear regression model. 
+
+```{r}
+# df_prelim$cast_latitude <- NULL
+# df_prelim$cast_latitude <- NULL
+# df_prelim$depth_cast <- NULL
+```
+
+For sake of simplification, we will remove weather, cloud, sea_state, wind_speed, and wind_direction. However, with more time, would try to investigate these variables further. 
+
+
+## Build second model
+
+### Build new dataset
+```{r}
+df_model_2 <- df_prelim[, c(
+  "year",
+  "haul_latitude",
+  "haul_longitude",
+  "depth_haul",
+  "ship_number",
+  "bottom_temp",
+  "air_temp",
+  "barometer",
+  "trawl_length",
+  "trawl_bearing",
+  "catch",
+  "log_catch",
+  "tow_station"
+)]
+```
+
+### Build new model
+```{r}
+model_2 <- lm(
+  log_catch ~
+    year +
+    haul_latitude +
+    haul_longitude +
+    depth_haul +
+    ship_number +
+    bottom_temp +
+    air_temp +
+    barometer +
+    trawl_length +
+    trawl_bearing,
+  data = df_model_2
+)
+
+summary(model_2)
+```
+Model 2 explains 18.36% of variation, but model 1 explains 20.9%.
+
+
+### Check collinearity
+```{r}
+vif_values_2 <- calculate_vif(model_2)
+
+round(vif_values_2, 2)
+```
+Largest VIF is 4.02, which is generally acceptable. 
+
+We can now use model 2 as a baseline model. 
+
+```{r}
+summary(model_2)$coefficients
+```
+barometer is not significant with p=0.897
+Similarly, depth_haul also has a high p-value of p=0.964. However this may suggest that the variable is non-linearly correlated with catch.
+
+```{r}
+par(mfrow = c(2, 2))
+plot(model_2)
+```
+
+```{r}
+drop1(model_2, test = "F")
+```
+
+
