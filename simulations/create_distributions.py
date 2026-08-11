@@ -92,6 +92,161 @@ def create_distributions(df,
 # # If we want to group by region, and also include the station numbers in each region:
 # region_dists = create_distributions(df, group_col='region', station_col='tow_station')
 
+
+def create_gamma_distributions(df,
+                               group_col='tow_station',
+                               catch_col='catch',
+                               station_col=None):
+    """
+    Creates a Gamma distribution for each group in the DataFrame.
+
+    Inputs:
+        df (pd.DataFrame): The input DataFrame containing the catch data.
+        group_col (str): The column to group by (e.g. 'tow_station' or 'quadrant').
+        catch_col (str): The column containing catch amounts.
+        station_col (str | None): If provided, each group's entry will include a
+                                  sorted list of unique station numbers.
+
+    Returns:
+        dict: {
+            group_name: {
+                'mean': float,
+                'std': float,
+                'shape': float,
+                'scale': float,
+                ['stations': list]
+            }
+        }
+    """
+
+    distributions = {}
+
+    for group_name, group in df.groupby(group_col):
+
+        # Remove missing values
+        catches = group[catch_col].dropna()
+
+        # Calculate sample mean and standard deviation
+        mean = catches.mean()
+        std = catches.std(ddof=1)
+
+        # Calculate Gamma parameters using method of moments
+        shape = (mean ** 2) / (std ** 2)
+        scale = (std ** 2) / mean
+
+        entry = {
+            'mean': mean,
+            'std': std,
+            'shape': shape,
+            'scale': scale
+        }
+
+        # Add station list if requested
+        if station_col is not None:
+            entry['stations'] = sorted(group[station_col].unique())
+
+        distributions[group_name] = entry
+
+    return distributions
+
+# =========== Example to call:
+# gamma_distributions = create_gamma_distributions(
+#     df,
+#     group_col='quadrant',
+#     catch_col='catch',
+#     station_col='tow_station'
+# )
+
+# =========== Will get something like:
+# Quadrant 1:
+#     mean: 692.89
+#     std: 850.21
+#     shape: 0.664
+#     scale: 1043.12
+#     stations: [...]
+
+# =========== To generate distributions:
+# np.random.gamma(
+#     shape=gamma_distributions[1]['shape'],
+#     scale=gamma_distributions[1]['scale']
+# )
+
+def create_lognormal_distributions(df,
+                                   group_col='tow_station',
+                                   catch_col='catch',
+                                   station_col=None):
+    """
+    Creates a log-normal distribution for each group in the DataFrame.
+
+    Inputs:
+        df (pd.DataFrame): The input DataFrame containing the catch data.
+        group_col (str): The column to group by (e.g. 'tow_station' or 'quadrant').
+        catch_col (str): The column containing catch amounts.
+        station_col (str | None): If provided, each group's entry will include a
+                                  sorted list of unique station numbers.
+
+    Returns:
+        dict: {
+            group_name: {
+                'mean': float,
+                'std': float,
+                'mu': float,
+                'sigma': float,
+                ['stations': list]
+            }
+        }
+    """
+
+    distributions = {}
+
+    for group_name, group in df.groupby(group_col):
+
+        # Remove missing values
+        catches = group[catch_col].dropna()
+
+        # Log-normal requires strictly positive values
+        catches = catches[catches > 0]
+
+        # Calculate mean and std of the original catch data
+        mean = catches.mean()
+        std = catches.std(ddof=1)
+
+        # Take natural logarithm of the catch values
+        log_catches = np.log(catches)
+
+        # Parameters of the underlying normal distribution
+        mu = log_catches.mean()
+        sigma = log_catches.std(ddof=1)
+
+        entry = {
+            'mean': mean,
+            'std': std,
+            'mu': mu,
+            'sigma': sigma
+        }
+
+        # Add station list if requested
+        if station_col is not None:
+            entry['stations'] = sorted(group[station_col].unique())
+
+        distributions[group_name] = entry
+
+    return distributions
+
+# =========== Example to call:
+# lognormal_distributions = create_lognormal_distributions(
+#     df,
+#     group_col='quadrant',
+#     catch_col='catch',
+#     station_col='tow_station'
+# )
+
+# =========== To generate distributions:
+# np.random.lognormal(
+#     mean=lognormal_distributions[1]['mu'],
+#     sigma=lognormal_distributions[1]['sigma']
+# )
+
 def main():
     # Example usage
     distributions = create_distributions(df, group_col='tow_station')

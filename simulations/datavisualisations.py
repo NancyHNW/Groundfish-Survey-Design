@@ -72,7 +72,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.stats import norm
+from scipy.stats import norm, gamma, lognorm
 
 # create_distributions.py loads the Excel file using the relative path
 # 'data/spring_historical_english.xlsx', which only resolves correctly if
@@ -82,7 +82,7 @@ from scipy.stats import norm
 # import, based on where THIS file lives on disk.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-from create_distributions import create_distributions, df  # df is already loaded in create_distributions.py
+from create_distributions import create_distributions, create_gamma_distributions, create_lognormal_distributions, df  # df is already loaded in create_distributions.py
 
 
 # =============
@@ -202,22 +202,314 @@ def plot_all_stations(distributions, ax=None, n_points=300, truncate_at_zero=Tru
     return ax
 
 
+
+# ============================================================
+# Plot 3: Single station's Gamma distribution
+# ============================================================
+
+def plot_single_gamma(distributions, station_id, ax=None, n_points=500,
+                      show_hist_data=None, catch_col='catch'):
+    """
+    Plot the fitted Gamma distribution (PDF) for a single station.
+
+    Parameters:
+        distributions (dict): Output of create_gamma_distributions().
+        station_id: Key into `distributions` (e.g. a tow_station number).
+        ax (plt.Axes | None): Existing axes to plot on; creates a new figure
+                              if None.
+        n_points (int): Resolution of the PDF curve.
+        show_hist_data (pd.DataFrame | None): Optionally pass the raw df to
+                                              overlay historical catches.
+        catch_col (str): Catch column name, used only if show_hist_data
+                         is provided.
+
+    Returns:
+        ax (plt.Axes)
+    """
+
+    if station_id not in distributions:
+        raise KeyError(
+            f"Station {station_id} not found in distributions dict."
+        )
+
+    mean = distributions[station_id]['mean']
+    std = distributions[station_id]['std']
+    shape = distributions[station_id]['shape']
+    scale = distributions[station_id]['scale']
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Gamma distribution only exists for x >= 0
+    upper = mean + 4 * std
+    x = np.linspace(0, upper, n_points)
+
+    # scipy gamma parameterisation:
+    # a = shape, scale = scale
+    y = gamma.pdf(x, a=shape, scale=scale)
+
+    ax.plot(
+        x, y,
+        color='steelblue',
+        lw=2,
+        label=f'Station {station_id} — Gamma'
+    )
+
+    ax.fill_between(
+        x, y,
+        alpha=0.15,
+        color='steelblue'
+    )
+
+    # Optional historical data
+    if show_hist_data is not None:
+        station_catches = show_hist_data.loc[
+            show_hist_data['tow_station'] == station_id,
+            catch_col
+        ].dropna()
+
+        if len(station_catches) > 0:
+            ax.hist(
+                station_catches,
+                bins=15,
+                density=True,
+                alpha=0.4,
+                color='darkorange',
+                label='Historical catch (observed)'
+            )
+
+    # Mean of the fitted Gamma distribution
+    ax.axvline(
+        mean,
+        color='steelblue',
+        linestyle='--',
+        lw=1,
+        label=f'Mean = {mean:.0f} kg'
+    )
+
+    ax.set_xlabel('Catch (kg)')
+    ax.set_ylabel('Density')
+    ax.set_title(
+        f'Fitted Gamma Catch Distribution — Station {station_id}'
+    )
+
+    ax.legend()
+
+    ax.set_xlim(left=0)
+
+    return ax
+
+
+# ============================================================
+# Plot 4: Single station's Log-normal distribution
+# ============================================================
+
+def plot_single_lognormal(distributions, station_id, ax=None, n_points=500,
+                          show_hist_data=None, catch_col='catch'):
+    """
+    Plot the fitted Log-normal distribution (PDF) for a single station.
+
+    Parameters:
+        distributions (dict): Output of create_lognormal_distributions().
+        station_id: Key into `distributions` (e.g. a tow_station number).
+        ax (plt.Axes | None): Existing axes to plot on; creates a new figure
+                              if None.
+        n_points (int): Resolution of the PDF curve.
+        show_hist_data (pd.DataFrame | None): Optionally pass the raw df to
+                                              overlay historical catches.
+        catch_col (str): Catch column name, used only if show_hist_data
+                         is provided.
+
+    Returns:
+        ax (plt.Axes)
+    """
+
+    if station_id not in distributions:
+        raise KeyError(
+            f"Station {station_id} not found in distributions dict."
+        )
+
+    mean = distributions[station_id]['mean']
+    std = distributions[station_id]['std']
+    mu = distributions[station_id]['mu']
+    sigma = distributions[station_id]['sigma']
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Log-normal distribution only exists for x > 0
+    upper = mean + 4 * std
+    x = np.linspace(0.001, upper, n_points)
+
+    # scipy lognormal parameterisation:
+    # s = sigma, scale = exp(mu)
+    y = lognorm.pdf(
+        x,
+        s=sigma,
+        scale=np.exp(mu)
+    )
+
+    ax.plot(
+        x, y,
+        color='steelblue',
+        lw=2,
+        label=f'Station {station_id} — Log-normal'
+    )
+
+    ax.fill_between(
+        x, y,
+        alpha=0.15,
+        color='steelblue'
+    )
+
+    # Optional historical data
+    if show_hist_data is not None:
+        station_catches = show_hist_data.loc[
+            show_hist_data['tow_station'] == station_id,
+            catch_col
+        ].dropna()
+
+        if len(station_catches) > 0:
+            ax.hist(
+                station_catches,
+                bins=15,
+                density=True,
+                alpha=0.4,
+                color='darkorange',
+                label='Historical catch (observed)'
+            )
+
+    # Mean of the fitted log-normal distribution
+    ax.axvline(
+        mean,
+        color='steelblue',
+        linestyle='--',
+        lw=1,
+        label=f'Mean = {mean:.0f} kg'
+    )
+
+    ax.set_xlabel('Catch (kg)')
+    ax.set_ylabel('Density')
+    ax.set_title(
+        f'Fitted Log-normal Catch Distribution — Station {station_id}'
+    )
+
+    ax.legend()
+
+    ax.set_xlim(left=0)
+
+    return ax
+
+
+# if __name__ == '__main__':
+#     # df is imported directly from create_distributions.py above,
+#     # no need to reload the Excel file here.
+
+#     # Per-station distributions
+#     station_dists = create_distributions(df, group_col='tow_station')
+
+#     # --- Plot 1: a single station ---
+#     first_station = next(iter(station_dists))
+#     plot_single_station(station_dists, first_station, show_hist_data=df)
+#     plt.tight_layout()
+#     plt.savefig('single_station_distribution.png', dpi=150)
+#     plt.show()
+
+#     # --- Plot 2: all stations overlaid ---
+#     plot_all_stations(station_dists)
+#     plt.tight_layout()
+#     plt.savefig('all_stations_overlaid.png', dpi=150)
+#     plt.show()
+
 if __name__ == '__main__':
-    # df is imported directly from create_distributions.py above,
-    # no need to reload the Excel file here.
+    # ============================================================
+    # Create distributions for each station
+    # ============================================================
 
-    # Per-station distributions
-    station_dists = create_distributions(df, group_col='tow_station')
+    # Normal distribution
+    station_dists = create_distributions(
+        df,
+        group_col='tow_station'
+    )
 
-    # --- Plot 1: a single station ---
+    # Gamma distribution
+    gamma_station_dists = create_gamma_distributions(
+        df,
+        group_col='tow_station'
+    )
+
+    # Log-normal distribution
+    lognormal_station_dists = create_lognormal_distributions(
+        df,
+        group_col='tow_station'
+    )
+
+
+    # ============================================================
+    # Plot 1: Single station — Normal distribution
+    # ============================================================
+
     first_station = next(iter(station_dists))
-    plot_single_station(station_dists, first_station, show_hist_data=df)
+
+    plot_single_station(
+        station_dists,
+        first_station,
+        show_hist_data=df
+    )
+
     plt.tight_layout()
-    plt.savefig('single_station_distribution.png', dpi=150)
+    plt.savefig(
+        'single_station_normal_distribution.png',
+        dpi=150
+    )
     plt.show()
 
-    # --- Plot 2: all stations overlaid ---
-    plot_all_stations(station_dists)
+
+    # ============================================================
+    # Plot 2: Single station — Gamma distribution
+    # ============================================================
+
+    plot_single_gamma(
+        gamma_station_dists,
+        first_station,
+        show_hist_data=df
+    )
+
     plt.tight_layout()
-    plt.savefig('all_stations_overlaid.png', dpi=150)
+    plt.savefig(
+        'single_station_gamma_distribution.png',
+        dpi=150
+    )
+    plt.show()
+
+
+    # ============================================================
+    # Plot 3: Single station — Log-normal distribution
+    # ============================================================
+
+    plot_single_lognormal(
+        lognormal_station_dists,
+        first_station,
+        show_hist_data=df
+    )
+
+    plt.tight_layout()
+    plt.savefig(
+        'single_station_lognormal_distribution.png',
+        dpi=150
+    )
+    plt.show()
+
+
+    # ============================================================
+    # Plot 4: All stations — Normal distributions overlaid
+    # ============================================================
+
+    plot_all_stations(station_dists)
+
+    plt.tight_layout()
+    plt.savefig(
+        'all_stations_normal_overlaid.png',
+        dpi=150
+    )
     plt.show()
