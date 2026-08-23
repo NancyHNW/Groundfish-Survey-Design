@@ -52,7 +52,8 @@ def heuristic_context():
 # Convert to the heuristic code's Problem
 # ---------------------------------------------------------------------------
 
-def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic"):
+def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic",
+                         home_ports=None, capacity_buffer=1.0):
     """Convert a ProblemInstance to the heuristic ``Problem`` class.
 
     Must be called inside a ``heuristic_context()`` block so that relative
@@ -66,6 +67,14 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic"):
         - "heuristic" (RandomMatchingCatches.dat, mean 859 kg)
         - "gfsp" (LimitedCatch.csv, mean 531 kg)
         - "historical" (historical station means from CatchSimulator, mean 812 kg)
+    home_ports : list[int] or None
+        Per-vessel home port node indices. If None, all vessels
+        start from instance.home_port.
+    capacity_buffer : float
+        Fraction of the true capacity the solver plans up to.  1.0 fills the
+        hold; 0.9 leaves 10% headroom so a trip whose realised catch comes in
+        heavier than planned is less likely to overflow.  The true capacity is
+        kept on the boats for evaluation.
 
     Returns
     -------
@@ -75,7 +84,8 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic"):
     from classes import Problem
 
     node_indices = list(instance.station_ids_to_node_indices())
-    home_ports = [instance.home_port] * instance.n_boats
+    if home_ports is None:
+        home_ports = [instance.home_port] * instance.n_boats
 
     prob = Problem(
         stations=node_indices,
@@ -84,6 +94,7 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic"):
         n_boats=instance.n_boats,
         boat_capacities=list(instance.capacities),
         home_ports=home_ports,
+        capacity_buffer=capacity_buffer,
     )
 
     if catch_source == "gfsp":
@@ -95,6 +106,56 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic"):
         override_catch_data(prob, catch_array=hist_means)
 
     return prob
+
+
+def grasp_partitioned(prob, rcl_size=2, seed=42):
+    """Run GRASP with stations pre-partitioned by nearest home port.
+
+    Each station is assigned to the boat whose home port is closest
+    (by travel time), so boats naturally cover their local region.
+    """
+    import random as _random
+    if seed is not None:
+        _random.seed(seed)
+        np.random.seed(seed)
+
+    # Partition stations by nearest home port
+    home_ports = [boat.home_port for boat in prob.boats]
+    partitions = {i: [] for i in range(prob.n_boats)}
+    for stn in prob.stations:
+        dists = [prob.time[hp, stn] for hp in home_ports]
+        nearest = int(np.argmin(dists))
+        partitions[nearest].append(stn)
+
+    print(f"  Station partition: {[len(v) for v in partitions.values()]} "
+          f"stations per boat")
+
+    # Run GRASP per boat on its partition
+    for b_idx, boat in enumerate(prob.boats):
+        my_stations = partitions[b_idx]
+        _random.shuffle(my_stations)
+        for stn in my_stations:
+            if stn not in prob.stations_left:
+                continue
+            current_trip = boat.route[-1]
+            state = max(current_trip.total_catch / boat.planning_capacity,
+                        current_trip.fish_time / prob.fish_time_limit)
+            if state >= 1.0 or not boat.check_node_valid(prob, stn):
+                boat.return_to_closest_port(prob)
+                prev_trip = boat.route[-2]
+                if (prev_trip.start_port == prev_trip.end_port
+                        and len(prev_trip.stations) > 0):
+                    if (prob.time[prev_trip.start_port, prev_trip.stations[0]]
+                            < prob.time[prev_trip.stations[-1], prev_trip.end_port]):
+                        prev_trip.stations = prev_trip.stations[::-1]
+                        prev_trip.evaluate_fish_time()
+            if stn in prob.stations_left:
+                boat.add_to_route(prob, stn)
+
+        # boats may finish at whichever port is closest - only the departure
+        # port is fixed to home, so there is no forced repositioning leg
+        boat.return_to_closest_port(prob)
+        boat.route = boat.route[:-1]
 
 
 def _load_gfsp_catch_array():
