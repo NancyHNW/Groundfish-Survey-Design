@@ -74,7 +74,11 @@ def solution_to_trips(prob) -> list:
     for boat in prob.boats:
         for trip in boat.route:
             full = trip.get_full_trip()
-            if len(full) > 2:
+            # A repositioning leg (boat sailing home from its last working
+            # port) has 2 nodes but real travel time, so it has to be kept or
+            # the total comes out too low. Empty padding trips also have 2
+            # nodes but cost 0, so the time check is what tells them apart.
+            if len(full) > 2 or trip.total_time > 0:
                 all_trips.append({
                     "boat_id": boat.id,
                     "nodes": full,
