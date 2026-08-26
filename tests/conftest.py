@@ -80,9 +80,11 @@ def _patch_time_matrix_caching():
             self.time = _cached_time
             self.catch = classes.load_catch_fixed_random_assignment().to_numpy().reshape(-1)
 
-        def _patched_boat_init(self, id, capacity, home_port, trip_w_port=True):
+        def _patched_boat_init(self, id, capacity, home_port, trip_w_port=True,
+                               capacity_buffer=1.0):
             self.id = id
             self.capacity = capacity
+            self.planning_capacity = capacity * capacity_buffer
             self.home_port = home_port
             if trip_w_port:
                 self.route = [classes.Trip(start_port=home_port)]

@@ -573,6 +573,81 @@ def plot_monte_carlo(stoch_result, save_path=None, deterministic_time=None,
     plt.close(fig)
 
 
+def plot_buffer_comparison(rows, save_path=None, title_suffix=None):
+    """Planned vs realised time across planning buffers, and what they cost.
+
+    Parameters
+    ----------
+    rows : list of dict
+        One per buffer, with keys: buffer, planned, mean, p5, p95,
+        p_exceed, e_returns.  Ordered by buffer.
+    save_path : str, optional
+        If given, save figure to this path instead of showing.
+    title_suffix : str, optional
+        Extra text for the figure title (e.g. instance size and method).
+    """
+    buffers = [r["buffer"] for r in rows]
+    x = [b * 100 for b in buffers]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    # --- Left: the tradeoff in hours ---
+    ax1.fill_between(x, [r["p5"] for r in rows], [r["p95"] for r in rows],
+                     color="#4C72B0", alpha=0.15, label="Realised 5th-95th pct")
+    ax1.plot(x, [r["mean"] for r in rows], "o-", color="#4C72B0", linewidth=2,
+             label="Mean realised time")
+    ax1.plot(x, [r["planned"] for r in rows], "s--", color="green", linewidth=2,
+             label="Planned time")
+
+    # the buffer that actually wins on realised time
+    best = min(rows, key=lambda r: r["mean"])
+    ax1.axvline(best["buffer"] * 100, color="red", linestyle=":", linewidth=1.5,
+                label=f"Best: {best['buffer']:.0%} ({best['mean']:.1f}h)")
+
+    ax1.set_xlabel("Planning buffer (% of true capacity)")
+    ax1.set_ylabel("Survey time (hours)")
+    ax1.set_title("Planned vs realised time")
+    ax1.legend(fontsize=8)
+    ax1.grid(alpha=0.3)
+
+    # --- Right: what the buffer buys ---
+    ax2.plot(x, [r["p_exceed"] * 100 for r in rows], "o-", color="#C44E52",
+             linewidth=2, label="P(capacity exceeded)")
+    ax2.set_xlabel("Planning buffer (% of true capacity)")
+    ax2.set_ylabel("P(exceed) [%]", color="#C44E52")
+    ax2.tick_params(axis="y", labelcolor="#C44E52")
+    ax2.set_ylim(-2, 102)
+
+    # per-trip, not absolute: a tighter buffer plans more trips, so the raw
+    # count can fall just by spreading the same risk over more trips
+    ax2b = ax2.twinx()
+    ax2b.plot(x, [r.get("returns_per_trip",
+                        r["e_returns"] / r["trips"] if r.get("trips") else 0.0)
+                  for r in rows],
+              "s--", color="#DD8452", linewidth=2,
+              label="E[unscheduled returns] per planned trip")
+    ax2b.set_ylabel("Unscheduled returns per planned trip", color="#DD8452")
+    ax2b.tick_params(axis="y", labelcolor="#DD8452")
+
+    lines = ax2.get_lines() + ax2b.get_lines()
+    ax2.legend(lines, [l.get_label() for l in lines], fontsize=8, loc="best")
+    ax2.set_title("Overflow risk")
+    ax2.grid(alpha=0.3)
+
+    if title_suffix:
+        fig.suptitle(title_suffix, fontsize=10)
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+    else:
+        plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=200)
+        print(f"Saved plot to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Visualisation
 # ---------------------------------------------------------------------------
@@ -639,9 +714,14 @@ def _draw_routes(ax, solution_trips, nodes):
     """Draw trip routes coloured by boat."""
     boat_colors = list(mcolors.TABLEAU_COLORS.values())
     trip_styles = ["-", "--", ":", "-."]
-    for trip_idx, trip in enumerate(solution_trips):
+    # number trips within each boat, so the legend reads "Boat 2, Trip 1"
+    # rather than continuing the global count
+    trip_counter = {}
+    for trip in solution_trips:
         trip_nodes = trip["nodes"]
         boat_id = trip["boat_id"]
+        trip_idx = trip_counter.get(boat_id, 0)
+        trip_counter[boat_id] = trip_idx + 1
         color = boat_colors[boat_id % len(boat_colors)]
         style = trip_styles[trip_idx % len(trip_styles)]
 
@@ -705,6 +785,48 @@ def _draw_overflows(ax, result, nodes):
             color=color, fontweight="bold",
             bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=color, alpha=0.8),
         )
+
+
+def plot_solution(solution_trips, instance, save_path=None, title=None):
+    """Map of a planned solution — no stochastic realisation needed.
+
+    The deterministic counterpart to ``plot_realisation``: draws the routes a
+    solver produced, without overflow markers or detour lines.
+
+    Parameters
+    ----------
+    solution_trips : list[dict]
+        Trip dicts from ``solution_to_trips`` (need 'nodes', 'boat_id').
+    instance : ProblemInstance
+    save_path : str, optional
+        If given, save the figure here instead of showing it.
+    title : str, optional
+        Title text; defaults to a summary of trips and total time.
+    """
+    nodes, n_ports, n_stations = _load_nodes()
+    island = _load_island()
+
+    fig, ax = plt.subplots(figsize=(14, 10))
+    _draw_base_map(ax, nodes, n_ports, island, instance)
+    _draw_routes(ax, solution_trips, nodes)
+
+    if title is None:
+        total_time = sum(t["total_time"] for t in solution_trips)
+        title = (f"Planned route — {instance.ns} stations, "
+                 f"{instance.n_boats} boats, {len(solution_trips)} trips, "
+                 f"total time {total_time:.1f} h")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title(title)
+    ax.legend(loc="lower right", fontsize=8)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=200)
+        print(f"Saved plot to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
 
 
 def plot_realisation(solution_trips, instance, result, save_path=None):

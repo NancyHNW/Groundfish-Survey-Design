@@ -145,8 +145,8 @@ def swap(Prob, old_obj, old_pen, boat_idx1, boat1, trip_idx1, trip1, st1, tow1, 
     new_catch2 = trip2.total_catch + d_fish
 
     # calculate the change in catch penalty
-    catch_pen1 = max(0, new_catch1 - boat1.capacity) * k_catch if trip1.total_catch <= boat1.capacity else (max(new_catch1, boat1.capacity) - trip1.total_catch) * k_catch
-    catch_pen2 = max(0, new_catch2 - boat2.capacity) * k_catch if trip2.total_catch <= boat2.capacity else (max(new_catch2, boat2.capacity) - trip2.total_catch) * k_catch
+    catch_pen1 = max(0, new_catch1 - boat1.planning_capacity) * k_catch if trip1.total_catch <= boat1.planning_capacity else (max(new_catch1, boat1.planning_capacity) - trip1.total_catch) * k_catch
+    catch_pen2 = max(0, new_catch2 - boat2.planning_capacity) * k_catch if trip2.total_catch <= boat2.planning_capacity else (max(new_catch2, boat2.planning_capacity) - trip2.total_catch) * k_catch
 
     def evaluate(s1opt, s1orig, s2opt, s2orig, node1, node2, p_s1, p_s2):
         # determine the change in objective and penalty for each option
@@ -358,7 +358,7 @@ def next_descent_swap(Prob, k_catch, k_fish, upper_bound, seed=None, test=False,
 
                             if old_pen < 1e-6 and test:
                                 change_in_catch = Prob.catch[int(math.floor((st1-13)/2))].item() - Prob.catch[int(math.floor((st2-13)/2))].item()
-                                if trip1.total_catch - change_in_catch > boat1.capacity or trip2.total_catch + change_in_catch > boat2.capacity:
+                                if trip1.total_catch - change_in_catch > boat1.planning_capacity or trip2.total_catch + change_in_catch > boat2.planning_capacity:
                                     stations_left2.remove(st2)
                                     skipped_counter += 1
                                     continue
@@ -463,7 +463,7 @@ def next_descent_swap_improved(Prob, k_catch, k_fish, upper_bound, seed=None, te
             if old_pen < 1e-6 and test:
                 # check if the swap is unlikely to be good without doing the calculation (testing showed it didn't really seem to help)
                 change_in_catch = Prob.catch[int(math.floor((st1-13)/2))].item() - Prob.catch[int(math.floor((st2-13)/2))].item()
-                if trip1.total_catch - change_in_catch > boat1.capacity or trip2.total_catch + change_in_catch > boat2.capacity:
+                if trip1.total_catch - change_in_catch > boat1.planning_capacity or trip2.total_catch + change_in_catch > boat2.planning_capacity:
                     possible_swaps.remove((st1, st2))
                     catch_saved += 1
                     skipped_counter += 1
@@ -634,8 +634,8 @@ def move(Prob, old_obj, old_pen, boat_idx1, boat1, trip_idx1, trip1, st1, tow1, 
     new_catch1 = trip1.total_catch - d_fish
     new_catch2 = trip2.total_catch + d_fish
 
-    catch_pen1 = max(0, new_catch1 - boat1.capacity) * k_catch if trip1.total_catch <= boat1.capacity else (max(new_catch1, boat1.capacity) - trip1.total_catch) * k_catch
-    catch_pen2 = max(0, new_catch2 - boat2.capacity) * k_catch if trip2.total_catch <= boat2.capacity else (max(new_catch2, boat2.capacity) - trip2.total_catch) * k_catch
+    catch_pen1 = max(0, new_catch1 - boat1.planning_capacity) * k_catch if trip1.total_catch <= boat1.planning_capacity else (max(new_catch1, boat1.planning_capacity) - trip1.total_catch) * k_catch
+    catch_pen2 = max(0, new_catch2 - boat2.planning_capacity) * k_catch if trip2.total_catch <= boat2.planning_capacity else (max(new_catch2, boat2.planning_capacity) - trip2.total_catch) * k_catch
     
     def evaluate(s1opt, s1orig, node1, p_s1):
         df = evaluate_neighbour(Prob, old_seq1, old_seq_chngd1, s1orig, s1opt)
@@ -891,7 +891,7 @@ def steepest_descent_combined(Prob, k_catch, k_fish, upper_bound, work_limit, ts
                         for trip_idx2 in trip2_options:
                             trip2 = boat2.route[trip_idx2]
 
-                            if trip2.total_catch / boat2.capacity > 0.95 or trip2.fish_time / Prob.fish_time_limit > 0.95:
+                            if trip2.total_catch / boat2.planning_capacity > 0.95 or trip2.fish_time / Prob.fish_time_limit > 0.95:
                                 rule_type = 'swap'
                                 station2_options = [station for station in trip2.stations.copy() if station % 2 == 1]
                                 if len(trip2.stations) == 0:
@@ -1108,7 +1108,7 @@ def next_descent_combined(Prob, k_catch, k_fish, upper_bound, work_limit, seed=N
                         trip_idx2 = random.choice(trips_left2)
                         trip2 = boat2.route[trip_idx2]
                         # potentially change to amt of capacity left < average catch
-                        if trip2.total_catch / boat2.capacity > 0.95 or trip2.fish_time / Prob.fish_time_limit > 0.95:
+                        if trip2.total_catch / boat2.planning_capacity > 0.95 or trip2.fish_time / Prob.fish_time_limit > 0.95:
                             rule_type = 'swap'
                             stations_left2 = [station for station in trip2.stations.copy() if station % 2 == 1]
                             if len(trip2.stations) == 0:
@@ -1446,7 +1446,7 @@ def tabu_search_combined(Prob, k_catch, k_fish, upper_bound, work_limit, history
                         for trip_idx2 in trip2_options:
                             trip2 = boat2.route[trip_idx2]
 
-                            if trip2.total_catch / boat2.capacity > 0.95 or trip2.fish_time / Prob.fish_time_limit > 0.95:
+                            if trip2.total_catch / boat2.planning_capacity > 0.95 or trip2.fish_time / Prob.fish_time_limit > 0.95:
                                 rule_type = 'swap'
                                 station2_options = [station for station in trip2.stations.copy() if station % 2 == 1]
                                 

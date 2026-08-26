@@ -241,19 +241,22 @@ def test_boat_id_capacity_mapping():
     print("PASS: boat capacity mapping\n")
 
 
-def test_visualise_real_problem(strategy="backtrack", preemptive_threshold=0.8, seed=None):
+def test_visualise_real_problem(strategy="backtrack", preemptive_threshold=0.8, seed=None, home_ports=None, ns=20, cf=62.5, full=False):
     """Solve a real gfsp problem and visualise one realisation.
 
     Uses real routes (GRASP + tabu) and real catch sampled from historical
     spring survey distributions (via CatchSimulator).
     """
-    from unified.loaders import load_gfsp_problem
+    from unified.loaders import load_gfsp_problem, load_gfsp_full_problem
     from unified.adapters import heuristic_context, to_heuristic_problem
     from unified.evaluate import solution_to_trips
     from unified.stochastic_eval import evaluate_single_realisation, plot_realisation
 
-    # Load a small test problem
-    inst = load_gfsp_problem(ns=20, nv=2, cf=62.5, instance=1)
+    # Load a test problem
+    if full:
+        inst = load_gfsp_full_problem()
+    else:
+        inst = load_gfsp_problem(ns=ns, nv=2, cf=cf, instance=1)
     print(f"Loaded: {inst}")
 
     # record which solver steps ran so the filename reflects it
@@ -263,7 +266,8 @@ def test_visualise_real_problem(strategy="backtrack", preemptive_threshold=0.8, 
     with heuristic_context():
         from classes import Problem, Trip
         from neighbourhood_rules import tabu_search_combined
-        prob = to_heuristic_problem(inst, catch_source="historical")
+        prob = to_heuristic_problem(inst, catch_source="historical",
+                                    home_ports=home_ports)
         prob.GRASP(rcl_size=2, seed=42)
         solver_steps.append("grasp")
 
@@ -443,7 +447,8 @@ def test_monte_carlo_all_overflow():
 def run_mc_comparison(methods=("grasp_only", "grasp_swap", "tabu_move"),
                       ns=20, nv=2, cf=62.5, instance=1,
                       time_limit=120, n_scenarios=500, scenario_seed=123,
-                      catch_source="gfsp", strategy="backtrack"):
+                      catch_source="gfsp", strategy="backtrack",
+                      capacity_buffer=1.0):
     """Run Monte Carlo for several heuristics and compare them.
 
     Solves the problem with each method, then evaluates all the solutions
@@ -484,7 +489,8 @@ def run_mc_comparison(methods=("grasp_only", "grasp_swap", "tabu_move"),
         det = run_heuristic_on_gfsp(ns=ns, nv=nv, cf=cf, instance=instance,
                                     method=solver_method.get(method, method),
                                     time_limit=time_limit,
-                                    catch_source=catch_source)
+                                    catch_source=catch_source,
+                                    capacity_buffer=capacity_buffer)
         trips = det["trips"]
         inst = det["instance"]
         print(f"Got {len(trips)} trips (deterministic obj={det['objective']:.1f})")
@@ -515,7 +521,8 @@ def run_mc_comparison(methods=("grasp_only", "grasp_swap", "tabu_move"),
 
 def run_strategy_comparison(ns=100, nv=2, cf=250, instance=1,
                             time_limit=10, n_scenarios=500, scenario_seed=123,
-                            catch_source="historical", method="tabu_move"):
+                            catch_source="historical", method="tabu_move",
+                            capacity_buffer=1.0):
     """Run a single method, then evaluate it under multiple overflow strategies."""
     from unified.run_example import run_heuristic_on_gfsp
     from unified.stochastic_eval import (StochasticEvaluator,
@@ -539,7 +546,8 @@ def run_strategy_comparison(ns=100, nv=2, cf=250, instance=1,
     det = run_heuristic_on_gfsp(ns=ns, nv=nv, cf=cf, instance=instance,
                                 method=solver_method.get(method, method),
                                 time_limit=time_limit,
-                                catch_source=catch_source)
+                                catch_source=catch_source,
+                                capacity_buffer=capacity_buffer)
     trips = det["trips"]
     inst = det["instance"]
     det_time = sum(t["total_time"] for t in trips)
@@ -582,6 +590,120 @@ def run_strategy_comparison(ns=100, nv=2, cf=250, instance=1,
               f"{td['mean']:>14.1f}{td['p95']:>14.1f}")
 
 
+def run_buffer_comparison(ns=100, nv=2, cf=125, instance=1,
+                          time_limit=10, n_scenarios=500, scenario_seed=123,
+                          catch_source="gfsp", method="tabu_move",
+                          strategy="backtrack", preemptive_threshold=0.8,
+                          buffers=(0.7, 0.8, 0.9, 1.0)):
+    """Solve at several planning buffers and score each against the scenarios.
+
+    The deterministic half of the question ("what does the buffer cost in
+    planned time?") is answered by run_example's --compare-buffers.  This adds
+    the half that matters: what the buffer buys back in avoided overflows.
+    Planned time rises as alpha falls, so the buffer is only worth it if mean
+    realised time falls by more than planned time rose.
+    """
+    import csv
+    from unified.run_example import run_heuristic_on_gfsp
+    from unified.stochastic_eval import (StochasticEvaluator,
+                                          plot_buffer_comparison)
+    from unified.stochastic_catch import CatchSimulator
+
+    solver_method = {
+        "grasp_only": "grasp_only",
+        "grasp_swap": "grasp",
+        "tabu_move": "tabu_move",
+    }
+
+    # One scenario set shared across every buffer, so the differences are the
+    # solutions and not the sampling
+    sim = CatchSimulator(seed=scenario_seed)
+    sim.fit()
+    scenarios = sim.sample(n_scenarios=n_scenarios)
+    evaluator = StochasticEvaluator(scenarios=scenarios)
+
+    results = {}
+    last_inst = None
+    for alpha in buffers:
+        print(f"\n{'='*60}\nCapacity buffer: {alpha:.0%}\n{'='*60}")
+        det = run_heuristic_on_gfsp(ns=ns, nv=nv, cf=cf, instance=instance,
+                                    method=solver_method.get(method, method),
+                                    time_limit=time_limit,
+                                    catch_source=catch_source,
+                                    capacity_buffer=alpha)
+        trips = det["trips"]
+        inst = det["instance"]
+        last_inst = inst
+        det_time = sum(t["total_time"] for t in trips)
+        result = evaluator.evaluate(trips, inst, strategy=strategy,
+                                    preemptive_threshold=preemptive_threshold)
+        results[alpha] = {"result": result, "planned": det_time,
+                          "trips": len(trips), "feasible": det["feasible"]}
+        print(f"Planned {det_time:.1f}h over {len(trips)} trips, "
+              f"P(exceed)={result['p_capacity_exceedance']:.1%}")
+
+    baseline = results[max(buffers)]["result"]["total_time_distribution"]["mean"]
+
+    # flatten into rows once, then reuse for the table, the CSV and the plot
+    rows = []
+    for alpha in buffers:
+        entry = results[alpha]
+        result = entry["result"]
+        td = result["total_time_distribution"]
+        rows.append({
+            "buffer": alpha,
+            "planned": entry["planned"],
+            "trips": entry["trips"],
+            "feasible": entry["feasible"],
+            "p_exceed": result["p_capacity_exceedance"],
+            "e_returns": result["expected_unscheduled_returns"],
+            # normalised, because a tighter buffer plans more trips - the raw
+            # count can fall simply by spreading the same risk over more trips
+            "returns_per_trip": (result["expected_unscheduled_returns"]
+                                 / entry["trips"] if entry["trips"] else 0.0),
+            "mean": td["mean"],
+            "p5": td["p5"],
+            "p95": td["p95"],
+            "vs_full": td["mean"] - baseline,
+        })
+
+    print(f"\n{'='*78}")
+    print(f"BUFFER COMPARISON  (strategy={strategy}, {n_scenarios} scenarios)")
+    print(f"{'='*78}")
+    print(f"{'buffer':<9}{'planned':>9}{'trips':>7}{'P(exceed)':>11}"
+          f"{'E[ret]':>8}{'ret/trip':>10}{'mean time':>11}{'p95 time':>10}"
+          f"{'vs 100%':>9}")
+    print("-" * 84)
+    for row in rows:
+        print(f"{row['buffer']:<9.0%}{row['planned']:>9.1f}{row['trips']:>7d}"
+              f"{row['p_exceed']:>11.1%}{row['e_returns']:>8.2f}"
+              f"{row['returns_per_trip']:>10.3f}"
+              f"{row['mean']:>11.1f}{row['p95']:>10.1f}{row['vs_full']:>+9.1f}")
+
+    best = min(rows, key=lambda r: r["mean"])
+    print(f"\nLowest mean realised time: buffer {best['buffer']:.0%}")
+    if best["buffer"] == max(buffers):
+        print("No buffer beat planning to full capacity on this instance.")
+
+    # persist — stdout alone is not much use for a writeup
+    tag = f"{method}-{strategy}"
+    csv_path = plot_output_path("buffer-comparison", tag,
+                                last_inst).replace(".png", ".csv")
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Table saved to {csv_path}")
+
+    plot_path = plot_output_path("buffer-comparison", tag, last_inst)
+    plot_buffer_comparison(
+        rows, save_path=plot_path,
+        title_suffix=(f"ns={ns}, nv={nv}, cf={cf}, {method}, {strategy}, "
+                      f"{n_scenarios} scenarios, catch={catch_source}"))
+
+    return results
+
+
 def test_monte_carlo_real_problem():
     """Quick end-to-end run of the heuristic comparison (three methods)."""
     results = run_mc_comparison(
@@ -600,10 +722,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--plot", action="store_true",
                         help="Run the visualisation test with a real problem")
+    parser.add_argument("--full", action="store_true",
+                        help="Use the full 581-station problem (4 boats)")
     parser.add_argument("--mc", action="store_true",
                         help="Run the Monte Carlo method comparison")
     parser.add_argument("--sc", action="store_true",
                         help="Run the strategy comparison + threshold sweep")
+    parser.add_argument("--bc", action="store_true",
+                        help="Run the capacity-buffer comparison over scenarios")
+    parser.add_argument("--buffers", nargs="+", type=float,
+                        default=[0.7, 0.8, 0.9, 1.0],
+                        help="Buffers to compare with --bc (default: 0.7 0.8 0.9 1.0)")
     parser.add_argument("--strategy", default="backtrack",
                         choices=["backtrack", "forward", "preemptive"],
                         help="Overflow strategy (default: backtrack)")
@@ -618,6 +747,20 @@ if __name__ == "__main__":
                         help="Number of stations (default: 20)")
     parser.add_argument("--cf", type=float, default=62.5,
                         help="Capacity factor (default: 62.5)")
+    parser.add_argument("--home-ports", type=int, nargs="+", default=None,
+                        help="Per-vessel home port node indices (e.g. --home-ports 4 8)")
+    parser.add_argument("--nv", type=int, default=2,
+                        help="Number of vessels, used by --mc/--sc (default: 2)")
+    parser.add_argument("--method", default="tabu_move",
+                        choices=["grasp_only", "grasp_swap", "tabu_move"],
+                        help="Solver for --sc (--mc always compares all three)")
+    parser.add_argument("--capacity-buffer", type=float, default=1.0,
+                        help="Fraction of capacity the solver plans to, e.g. 0.8 "
+                             "leaves 20%% headroom (default 1.0 = full capacity)")
+    parser.add_argument("--n-scenarios", type=int, default=500,
+                        help="Monte Carlo scenarios for --mc/--sc (default: 500)")
+    parser.add_argument("--time-limit", type=float, default=10,
+                        help="Solver time limit in seconds (default: 10)")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -653,22 +796,54 @@ if __name__ == "__main__":
         print("=" * 60 + "\n")
         test_visualise_real_problem(strategy=args.strategy,
                                     preemptive_threshold=args.threshold,
-                                    seed=args.seed)
+                                    seed=args.seed,
+                                    home_ports=args.home_ports,
+                                    ns=args.ns, cf=args.cf,
+                                    full=args.full)
 
     if args.mc:
         print("\n" + "=" * 60)
-        print(f"Running Monte Carlo test (ns={args.ns}, cf={args.cf}, catch_source={args.catch_source})...")
+        print(f"Running Monte Carlo test (ns={args.ns}, nv={args.nv}, cf={args.cf}, "
+              f"catch_source={args.catch_source}, buffer={args.capacity_buffer:.0%}, "
+              f"scenarios={args.n_scenarios})...")
         print("=" * 60 + "\n")
         run_mc_comparison(
-            ns=args.ns, cf=args.cf, catch_source=args.catch_source,
-            time_limit=10,
+            ns=args.ns, nv=args.nv, cf=args.cf,
+            catch_source=args.catch_source,
+            capacity_buffer=args.capacity_buffer,
+            n_scenarios=args.n_scenarios,
+            time_limit=args.time_limit,
         )
 
     if args.sc:
         print("\n" + "=" * 60)
-        print(f"Running strategy comparison (ns={args.ns}, cf={args.cf}, catch_source={args.catch_source})...")
+        print(f"Running strategy comparison (ns={args.ns}, nv={args.nv}, cf={args.cf}, "
+              f"method={args.method}, catch_source={args.catch_source}, "
+              f"buffer={args.capacity_buffer:.0%}, scenarios={args.n_scenarios})...")
         print("=" * 60 + "\n")
         run_strategy_comparison(
-            ns=args.ns, cf=args.cf, catch_source=args.catch_source,
-            time_limit=10,
+            ns=args.ns, nv=args.nv, cf=args.cf,
+            catch_source=args.catch_source,
+            method=args.method,
+            capacity_buffer=args.capacity_buffer,
+            n_scenarios=args.n_scenarios,
+            time_limit=args.time_limit,
+        )
+
+    if args.bc:
+        print("\n" + "=" * 60)
+        print(f"Running buffer comparison (ns={args.ns}, nv={args.nv}, cf={args.cf}, "
+              f"method={args.method}, catch_source={args.catch_source}, "
+              f"strategy={args.strategy}, scenarios={args.n_scenarios}, "
+              f"buffers={[f'{b:.0%}' for b in args.buffers]})...")
+        print("=" * 60 + "\n")
+        run_buffer_comparison(
+            ns=args.ns, nv=args.nv, cf=args.cf,
+            catch_source=args.catch_source,
+            method=args.method,
+            strategy=args.strategy,
+            preemptive_threshold=args.threshold,
+            n_scenarios=args.n_scenarios,
+            buffers=tuple(args.buffers),
+            time_limit=args.time_limit,
         )

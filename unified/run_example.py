@@ -11,6 +11,7 @@ This script demonstrates the full workflow:
   4. Evaluate and display the solution
 """
 
+import os
 import time
 import numpy as np
 
@@ -18,10 +19,25 @@ from unified.loaders import load_gfsp_problem, load_heuristic_problem, list_gfsp
 from unified.adapters import heuristic_context, to_heuristic_problem
 from unified.evaluate import evaluate_heuristic_solution, compare_results, solution_to_trips
 
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+
+
+def plot_output_path(plot_name, solver_tag, inst=None):
+    """Path under tests/outputs/ named by plot, solver and instance size."""
+    out_dir = os.path.join(_ROOT, "tests", "outputs")
+    os.makedirs(out_dir, exist_ok=True)
+    parts = [plot_name, solver_tag]
+    if inst is not None:
+        parts.append(f"ns{inst.ns}-nv{inst.n_boats}")
+    return os.path.join(out_dir, "_".join(parts) + ".png")
+
 
 def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
                           time_limit=10, seed=42, init="grasp",
-                          catch_source="gfsp"):
+                          catch_source="gfsp", home_ports=None,
+                          capacity_buffer=1.0, plot=False, simulate=True,
+                          strategy="backtrack", preemptive_threshold=0.8,
+                          sim_seed=None):
     """Run heuristic solvers on a gfsp test problem.
 
     Parameters
@@ -33,6 +49,14 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
     init : str — "grasp" (probabilistic, may violate capacity) or
                  "greedy" (strict constraint enforcement)
     catch_source : str — "gfsp", "heuristic", or "historical"
+    capacity_buffer : float — fraction of true capacity the solver plans to
+                     (e.g. 0.9 leaves 10% headroom for heavier-than-planned catch)
+    plot : bool — save figures to tests/outputs/
+    simulate : bool — when plotting, also draw one catch realisation and plot
+               planned vs simulated (set False for the planned map only)
+    strategy : str — overflow response used in the simulation
+    preemptive_threshold : float — trigger fraction for strategy="preemptive"
+    sim_seed : int or None — seed for the simulated catch draw
 
     Returns
     -------
@@ -53,8 +77,13 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
             simulated_annealing,
         )
 
-        prob = to_heuristic_problem(inst, catch_source=catch_source)
+        prob = to_heuristic_problem(inst, catch_source=catch_source,
+                                    home_ports=home_ports,
+                                    capacity_buffer=capacity_buffer)
         print(f"Created Problem: {prob}")
+        if capacity_buffer != 1.0:
+            print(f"Planning to {capacity_buffer:.0%} of capacity: "
+                  f"{[f'{b.planning_capacity:.0f}/{b.capacity:.0f}' for b in prob.boats]}")
 
         # Penalty parameters (same logic as final_testing_heur.py)
         k_catch = max(1.0, (400000 - np.mean(inst.capacities)) * 0.001)
@@ -92,6 +121,7 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
                 # Improve route ordering first
                 for boat in prob.boats:
                     boat.improve_route(prob)
+                # boats end at their home port, so the padding trip starts there
                 for boat in prob.boats:
                     if len(boat.route) == 1:
                         boat.route.append(Trip(boat.home_port, [], boat.home_port))
@@ -143,6 +173,7 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
         result["iterations"] = iteration
         result["elapsed"] = time.time() - t0
         result["method"] = method
+        result["capacity_buffer"] = capacity_buffer
         # return the trips too so the stochastic evaluator can reuse this solution
         # (extract here while prob is still valid)
         result["trips"] = solution_to_trips(prob)
@@ -151,15 +182,98 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
         print(f"\n--- Final Result ---")
         print(f"Method: {method}")
         print(f"Objective (total time): {result['objective']:.2f}")
-        print(f"Feasible: {result['feasible']}")
+        print(f"Feasible (true capacity): {result['feasible']}")
+        if capacity_buffer != 1.0:
+            print(f"Feasible ({capacity_buffer:.0%} buffered capacity): "
+                  f"{result['feasible_planning']}")
         print(f"Iterations: {iteration}")
         print(f"Elapsed: {result['elapsed']:.1f}s")
         prob.display_solution()
 
-        return result
+    if plot:
+        # outside the heuristic context — the plots only need the trip dicts
+        tag = method if capacity_buffer == 1.0 else f"{method}-buf{capacity_buffer:g}"
+
+        if simulate:
+            result["realisation"] = simulate_and_plot(
+                result, tag, strategy=strategy,
+                preemptive_threshold=preemptive_threshold, sim_seed=sim_seed,
+            )
+        else:
+            from unified.stochastic_eval import plot_solution
+
+            title = (f"{method} — {inst.ns} stations, {inst.n_boats} boats, "
+                     f"{len(result['trips'])} trips, "
+                     f"total time {result['objective']:.1f} h")
+            if capacity_buffer != 1.0:
+                title += f" (planning to {capacity_buffer:.0%} capacity)"
+            plot_solution(result["trips"], inst,
+                          save_path=plot_output_path("route-map", tag, inst),
+                          title=title)
+
+    return result
 
 
-def compare_methods_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, time_limit=10):
+def simulate_and_plot(result, tag, strategy="backtrack",
+                      preemptive_threshold=0.8, sim_seed=None):
+    """Draw one catch realisation for a solved route and plot what happens.
+
+    Produces the same pair of figures as ``tests/test_single_realisation.py
+    --plot``: the planned-vs-simulated map, and the per-trip time comparison.
+
+    Parameters
+    ----------
+    result : dict — output of run_heuristic_on_gfsp (needs 'trips', 'instance')
+    tag : str — filename tag, e.g. "tabu_move-buf0.9"
+    strategy : str — overflow response: "backtrack", "forward" or "preemptive"
+    preemptive_threshold : float — trigger fraction for the preemptive strategy
+    sim_seed : int or None — seed for the catch draw (None = a different
+               realisation each run)
+
+    Returns
+    -------
+    dict — output of evaluate_single_realisation
+    """
+    from unified.stochastic_catch import CatchSimulator
+    from unified.stochastic_eval import (evaluate_single_realisation,
+                                         plot_realisation, plot_time_comparison)
+
+    trips = result["trips"]
+    inst = result["instance"]
+
+    # The solver planned against its catch_source; the realisation is always
+    # drawn from the historical spring-survey distributions, so a solver that
+    # planned with lighter catch data will look worse here than it deserves.
+    sim = CatchSimulator(seed=sim_seed)
+    sim.fit()
+    catch = sim.sample(n_scenarios=1)[0]
+
+    realisation = evaluate_single_realisation(
+        trips, inst, catch, strategy=strategy,
+        preemptive_threshold=preemptive_threshold,
+    )
+
+    print(f"\n--- Simulated realisation (strategy={strategy}"
+          f"{f', threshold={preemptive_threshold:g}' if strategy == 'preemptive' else ''}"
+          f", seed={sim_seed}) ---")
+    print(f"Capacity exceeded:  {realisation['capacity_exceeded']}")
+    print(f"Unscheduled returns: {realisation['n_unscheduled_returns']}")
+    print(f"Planned total time:  {realisation['original_total_time']:.1f} h")
+    print(f"Actual total time:   {realisation['total_time']:.1f} h "
+          f"(+{realisation['time_penalty']:.1f} h, "
+          f"+{realisation['time_penalty'] / realisation['original_total_time']:.1%})")
+
+    sim_tag = f"{tag}-{strategy}"
+    plot_realisation(trips, inst, realisation,
+                     save_path=plot_output_path("realisation", sim_tag, inst))
+    plot_time_comparison(trips, realisation,
+                         save_path=plot_output_path("time-comparison", sim_tag, inst))
+
+    return realisation
+
+
+def compare_methods_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, time_limit=10,
+                            capacity_buffer=1.0):
     """Run multiple methods on the same gfsp problem and compare."""
     methods = ["grasp_only", "grasp", "sa"]
     results = []
@@ -170,6 +284,7 @@ def compare_methods_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, time_limit=10):
         r = run_heuristic_on_gfsp(
             ns=ns, nv=nv, cf=cf, instance=instance,
             method=m, time_limit=time_limit,
+            capacity_buffer=capacity_buffer,
         )
         results.append(r)
 
@@ -177,6 +292,33 @@ def compare_methods_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, time_limit=10):
     print("COMPARISON")
     print(f"{'='*60}")
     print(compare_results(*results, labels=methods))
+
+
+def compare_buffers_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
+                            time_limit=10, buffers=(0.7, 0.8, 0.9, 1.0)):
+    """Solve the same problem at several planning buffers and compare.
+
+    Answers "is the extra travel time of planning to alpha*Q worth the
+    overflows it avoids?" — the deterministic half of that question.  Run the
+    returned solutions through the stochastic evaluator for the other half.
+    """
+    results = []
+    for alpha in buffers:
+        print(f"\n{'='*60}")
+        print(f"Capacity buffer: {alpha:.0%}")
+        print(f"{'='*60}")
+        r = run_heuristic_on_gfsp(
+            ns=ns, nv=nv, cf=cf, instance=instance,
+            method=method, time_limit=time_limit,
+            capacity_buffer=alpha,
+        )
+        results.append(r)
+
+    print(f"\n{'='*60}")
+    print("BUFFER COMPARISON")
+    print(f"{'='*60}")
+    print(compare_results(*results, labels=[f"{a:.0%}" for a in buffers]))
+    return results
 
 
 if __name__ == "__main__":
@@ -198,16 +340,58 @@ if __name__ == "__main__":
                         help="Initial solution method")
     parser.add_argument("--compare", action="store_true",
                         help="Run multiple methods and compare")
+    parser.add_argument("--capacity-buffer", type=float, default=1.0,
+                        help="Fraction of capacity to plan to, e.g. 0.9 for a "
+                             "10%% headroom buffer (default 1.0 = full capacity)")
+    parser.add_argument("--plot", action="store_true", default=True,
+                        help="Save figures to tests/outputs/ (on by default)")
+    parser.add_argument("--no-plot", dest="plot", action="store_false",
+                        help="Skip all figures")
+    parser.add_argument("--no-sim", dest="simulate", action="store_false",
+                        help="Plot the planned route only, without simulating "
+                             "a catch realisation")
+    parser.add_argument("--strategy", default="backtrack",
+                        choices=["backtrack", "forward", "preemptive"],
+                        help="Overflow response in the simulation "
+                             "(default: backtrack)")
+    parser.add_argument("--threshold", type=float, default=0.8,
+                        help="Preemptive return threshold, 0.0-1.0 "
+                             "(only used with --strategy preemptive)")
+    parser.add_argument("--sim-seed", type=int, default=None,
+                        help="Seed for the simulated catch draw "
+                             "(default: a new realisation each run)")
+    parser.add_argument("--catch-source", default="gfsp",
+                        choices=["gfsp", "heuristic", "historical"],
+                        help="Catch data the solver plans against. The "
+                             "simulation always draws from historical "
+                             "distributions (default: gfsp)")
+    parser.add_argument("--compare-buffers", nargs="*", type=float,
+                        metavar="ALPHA",
+                        help="Solve at several planning buffers and compare "
+                             "(default: 0.7 0.8 0.9 1.0)")
     args = parser.parse_args()
 
-    if args.compare:
+    if args.compare_buffers is not None:
+        compare_buffers_on_gfsp(
+            ns=args.ns, nv=args.nv, cf=args.cf,
+            instance=args.instance, method=args.method,
+            time_limit=args.time_limit,
+            buffers=tuple(args.compare_buffers) or (0.7, 0.8, 0.9, 1.0),
+        )
+    elif args.compare:
         compare_methods_on_gfsp(
             ns=args.ns, nv=args.nv, cf=args.cf,
             instance=args.instance, time_limit=args.time_limit,
+            capacity_buffer=args.capacity_buffer,
         )
     else:
         run_heuristic_on_gfsp(
             ns=args.ns, nv=args.nv, cf=args.cf,
             instance=args.instance, method=args.method,
             time_limit=args.time_limit, init=args.init,
+            capacity_buffer=args.capacity_buffer,
+            catch_source=args.catch_source,
+            plot=args.plot, simulate=args.simulate,
+            strategy=args.strategy, preemptive_threshold=args.threshold,
+            sim_seed=args.sim_seed,
         )

@@ -17,7 +17,7 @@ except FileNotFoundError:
     time_matrix = np.load("local data/true_time.npy")
 
 class Problem:
-    def __init__(self, stations, ports, fish_time_limit, n_boats, boat_capacities=None, home_ports=None):
+    def __init__(self, stations, ports, fish_time_limit, n_boats, boat_capacities=None, home_ports=None, capacity_buffer=1.0):
         self.stations = stations.copy() # should be actual nodes
         self.stations_left = stations.copy()
         self.ports = ports.copy()
@@ -26,11 +26,14 @@ class Problem:
         self.n_ports = len(ports)
         self.n_boats = n_boats
         self.boats = []
+        # fraction of the true capacity the solver plans up to - leaves headroom for
+        # catches that turn out heavier than planned (1.0 = plan to full capacity)
+        self.capacity_buffer = capacity_buffer
         # stores which boat id each station is in for the current solution
         self.boat_dict = {}
         if boat_capacities is not None:
             for i in range(n_boats):
-                self.boats.append(Boat(i+1, boat_capacities[i], home_ports[i]))
+                self.boats.append(Boat(i+1, boat_capacities[i], home_ports[i], capacity_buffer=capacity_buffer))
         try:
             self.time = np.load("final_code/local data/true_time.npy")
         except (FileNotFoundError, ValueError):
@@ -108,6 +111,33 @@ class Problem:
 
             boat.current_node = boat.route[-1].end_port
     
+    def resolve_boat_selection(self, boat_selection):
+        # "auto" only uses locality-aware selection when the boats actually start
+        # from different ports - with a shared home port every boat has the same
+        # key on the first pick, so the rule degenerates into "always boat 1"
+        if boat_selection != "auto":
+            return boat_selection
+        if len({boat.home_port for boat in self.boats}) == 1:
+            return "random"
+        return "nearest"
+
+    def select_boat(self, boat_selection, balance_weight):
+        # picks which boat gets the next station
+        if boat_selection == "random":
+            return self.boats[random.randint(0, self.n_boats-1)]
+
+        # "nearest": prefer the boat with a close station, but push a boat away
+        # once it is running ahead of the least-loaded one. Both terms are in
+        # hours, so balance_weight is "hours of detour a boat is worth delaying
+        # per hour it is ahead"; balance_weight=0 is the pure greedy rule, which
+        # starves boats and must not be used as-is.
+        min_total_time = min(boat.total_time for boat in self.boats)
+        return min(
+            self.boats,
+            key=lambda b: (np.min(self.time[b.current_node, self.stations_left])
+                           + balance_weight * (b.total_time - min_total_time))
+        )
+
     def generate_initial_solution(self, seed=None):
         # creates greedy initial solution
         if seed is not None:
@@ -134,9 +164,9 @@ class Problem:
             if boat.current_node != boat.home_port:
                 boat.return_to_home_port(self)
             boat.route = boat.route[:-1] # when adding a port to a trip it automatically creates a new trip starting at that port so we need to delete the last trip
-        
+
         return
-    
+
     def GRASP(self, rcl_size=1, seed=None):
         # same as greedy algo but choosing between multiple of closest stations + chance to return to port based on current load/travel time
         if seed is not None:
@@ -148,7 +178,7 @@ class Problem:
             # print(rcl_list)
             current_trip = boat.route[-1]
             # if either load or time limit at 0-50%, no port chance, if at 100%, guaranteed port chance, otherwise linear interpolation between them
-            state = max(current_trip.total_catch / boat.capacity, current_trip.fish_time / self.fish_time_limit)
+            state = max(current_trip.total_catch / boat.planning_capacity, current_trip.fish_time / self.fish_time_limit)
             if state < 0.5:
                 port_perc = 0
             elif state < 1:
@@ -178,11 +208,13 @@ class Problem:
             if boat.current_node != boat.home_port:
                 boat.return_to_home_port(self)
             boat.route = boat.route[:-1] # when adding a port to a trip it automatically creates a new trip starting at that port so we need to delete the last trip
-        
+
         return
-    
-    def evaluate_solution(self, k_catch, k_fish, upper_bound, check_stations=False):
+
+    def evaluate_solution(self, k_catch, k_fish, upper_bound, check_stations=False, use_planning_capacity=True):
         # calculates the objective function and penalty values for the current solution
+        # use_planning_capacity=True penalises catch above the buffered capacity (what the
+        # solver plans to); False penalises only catch above the true boat capacity
         if check_stations:
             full_solution = []
             for boat in self.boats:
@@ -208,7 +240,7 @@ class Problem:
                     num_not_start_home_port += 1
                 if boat.route[-1].end_port != boat.home_port:
                     num_not_end_home_port += 1
-            
+
             num_stations_not_towed = 0
             for i, station in enumerate(full_solution):
                 if station < 13:
@@ -232,10 +264,11 @@ class Problem:
         amt_over_capacity = 0
         amt_over_fish_time_limit = 0
         for boat in self.boats:
+            cap = boat.planning_capacity if use_planning_capacity else boat.capacity
             for trip in boat.route:
                 trip.evaluate_total_catch()
                 trip.evaluate_fish_time()
-                amt_over_capacity += max(0, trip.total_catch - boat.capacity)
+                amt_over_capacity += max(0, trip.total_catch - cap)
                 amt_over_fish_time_limit += max(0, trip.fish_time - self.fish_time_limit)
 
         for boat in self.boats:
@@ -327,9 +360,12 @@ class Problem:
         
 
 class Boat:
-    def __init__(self, id, capacity, home_port, trip_w_port=True):
+    def __init__(self, id, capacity, home_port, trip_w_port=True, capacity_buffer=1.0):
         self.id = id
-        self.capacity = capacity
+        self.capacity = capacity # true physical capacity - used when evaluating a solution
+        # capacity the solver constructs/searches against; planning below the true
+        # capacity leaves room for catches heavier than the planning estimate
+        self.planning_capacity = capacity * capacity_buffer
         self.home_port = home_port
         if trip_w_port:
             self.route = [Trip(start_port=home_port)]
@@ -471,7 +507,7 @@ class Boat:
         else:
             if node not in Prob.stations_left:
                 return False
-            if self.current_load + float(self.catch[int(math.floor((node-13)/2))]) > self.capacity:
+            if self.current_load + float(self.catch[int(math.floor((node-13)/2))]) > self.planning_capacity:
                 return False
             if node % 2 == 0:
                 tow_node = node - 1

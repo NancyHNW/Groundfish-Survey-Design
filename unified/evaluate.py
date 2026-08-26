@@ -39,8 +39,12 @@ def evaluate_heuristic_solution(prob, instance: ProblemInstance) -> dict:
     k_fish = np.mean(instance.capacities) / instance.fish_time_limit * k_catch
     upper_bound = instance.upper_bound if np.isfinite(instance.upper_bound) else 10000
 
-    obj, pen = prob.evaluate_solution(k_catch, k_fish, upper_bound)
+    # "feasible" is judged against the true boat capacity; when the solver planned
+    # to a buffered capacity we also report whether it stayed inside that buffer
+    obj, pen = prob.evaluate_solution(k_catch, k_fish, upper_bound,
+                                      use_planning_capacity=False)
     feasible = pen < 1e-8
+    _, pen_planning = prob.evaluate_solution(k_catch, k_fish, upper_bound)
 
     trips = solution_to_trips(prob)
     boats_summary = []
@@ -56,6 +60,8 @@ def evaluate_heuristic_solution(prob, instance: ProblemInstance) -> dict:
         "objective": obj,
         "penalty": pen,
         "feasible": feasible,
+        "penalty_planning": pen_planning,
+        "feasible_planning": pen_planning < 1e-8,
         "total_time": obj,
         "trips": trips,
         "boats_summary": boats_summary,
