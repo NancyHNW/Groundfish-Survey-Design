@@ -422,8 +422,12 @@ class TestEvaluation:
             prob.restore_solution_from_list(sol)
             result = evaluate_heuristic_solution(prob, inst)
 
+        # feasible/penalty are judged against the true hold, *_planning against
+        # the buffered capacity the solver planned to. They coincide when
+        # capacity_buffer is 1.0.
         expected_keys = {"objective", "penalty", "feasible", "total_time",
-                         "trips", "boats_summary"}
+                         "trips", "boats_summary",
+                         "penalty_planning", "feasible_planning"}
         assert set(result.keys()) == expected_keys
 
     @pytest.mark.slow
