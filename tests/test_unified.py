@@ -422,8 +422,12 @@ class TestEvaluation:
             prob.restore_solution_from_list(sol)
             result = evaluate_heuristic_solution(prob, inst)
 
+        # feasible/penalty are judged against the true hold, *_planning against
+        # the buffered capacity the solver planned to. They coincide when
+        # capacity_buffer is 1.0.
         expected_keys = {"objective", "penalty", "feasible", "total_time",
-                         "trips", "boats_summary"}
+                         "trips", "boats_summary",
+                         "penalty_planning", "feasible_planning"}
         assert set(result.keys()) == expected_keys
 
     @pytest.mark.slow
@@ -576,8 +580,18 @@ class TestDirectVsUnified:
                 home_ports=home_ports_list,
             )
 
-            # Apply gfsp catch data (same as adapter)
-            override_catch_data(prob_direct)
+            # Apply gfsp catch data (same as adapter), including the ns == 10
+            # halving and trip-limit bump that gfsp_models.py:48-50 applies.
+            # Without it this instance has no feasible solution and greedy
+            # construction never terminates.
+            from unified.adapters import _patch_catch_loader_gfsp
+
+            gfsp_catch = _load_gfsp_catch_array().to_numpy().reshape(-1)
+            if inst.ns == 10:
+                gfsp_catch = gfsp_catch / 2
+                prob_direct.fish_time_limit = inst.fish_time_limit * 1.2
+            _patch_catch_loader_gfsp(gfsp_catch)
+            override_catch_data(prob_direct, catch_array=gfsp_catch)
 
             prob_direct.generate_initial_solution(seed=42)
             sol_direct = prob_direct.save_solution_as_list()

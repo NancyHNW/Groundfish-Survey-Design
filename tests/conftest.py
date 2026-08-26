@@ -3,6 +3,7 @@
 import os
 import sys
 import json
+import numpy as np
 import pytest
 
 # Ensure the repo root is importable
@@ -21,15 +22,40 @@ BASELINES_PATH = os.path.join(os.path.dirname(__file__), "golden_baselines.json"
 
 
 def load_baselines():
-    if os.path.isfile(BASELINES_PATH):
+    if not os.path.isfile(BASELINES_PATH):
+        return {}
+    try:
         with open(BASELINES_PATH) as f:
             return json.load(f)
-    return {}
+    except json.JSONDecodeError:
+        # A half-written file from an older run. Start clean rather than
+        # failing every test that wants baselines.
+        print(f"\n{BASELINES_PATH} is not valid JSON, ignoring it.")
+        return {}
+
+
+def _json_safe(obj):
+    """Convert numpy scalars json cannot serialise into Python ones.
+
+    Solutions come back from the solver as lists of numpy int64, which
+    json.dump rejects.
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Not JSON serializable: {type(obj).__name__}")
 
 
 def save_baselines(data):
+    # Serialise fully before touching the file. json.dump writes as it goes, so
+    # dumping straight to the open file leaves a truncated, unloadable file
+    # behind if anything raises part way through.
+    text = json.dumps(data, indent=2, default=_json_safe)
     with open(BASELINES_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+        f.write(text)
 
 
 @pytest.fixture(scope="session")

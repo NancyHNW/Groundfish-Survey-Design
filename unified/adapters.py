@@ -98,8 +98,20 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic",
     )
 
     if catch_source == "gfsp":
-        _patch_catch_loader_gfsp()
-        override_catch_data(prob)
+        if instance.ns == 10:
+            # gfsp_models.py halves the catch and raises the trip limit 20% for
+            # ns == 10, and only for ns == 10. Without it these instances have
+            # no feasible solution: four of the ten stations carry more than a
+            # single boat can hold, so greedy construction never terminates.
+            # Mirrored here so the ten-station problems mean the same thing on
+            # both sides. See gfsp_models.py:48-50.
+            catch = _load_gfsp_catch_array().to_numpy().reshape(-1) / 2
+            _patch_catch_loader_gfsp(catch)
+            override_catch_data(prob, catch_array=catch)
+            prob.fish_time_limit = instance.fish_time_limit * 1.2
+        else:
+            _patch_catch_loader_gfsp()
+            override_catch_data(prob)
     elif catch_source == "historical":
         hist_means = _load_historical_catch_array()
         _patch_catch_loader_historical(hist_means)
@@ -170,14 +182,22 @@ def _load_gfsp_catch_array():
     return catch_df
 
 
-def _patch_catch_loader_gfsp():
+def _patch_catch_loader_gfsp(catch_array=None):
     """Monkey-patch the catch loader so that new Boat/Trip objects created
     during reset() and GRASP() also use gfsp catch data.
 
     This patches ``load_catch_fixed_random_assignment`` in all modules
     that imported it via ``from data_loader import *``.
+
+    catch_array overrides the file contents, which is how the ns == 10
+    halving reaches Trips built later in construction. Trip.__init__ reloads
+    catch from disk, so patching the Problem alone is not enough.
     """
-    gfsp_catch_df = _load_gfsp_catch_array()
+    import pandas as pd
+    if catch_array is None:
+        gfsp_catch_df = _load_gfsp_catch_array()
+    else:
+        gfsp_catch_df = pd.DataFrame({"catch": catch_array})
 
     def patched_loader():
         return gfsp_catch_df

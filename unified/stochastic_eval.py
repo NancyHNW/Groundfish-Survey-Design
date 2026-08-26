@@ -48,8 +48,8 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         Pre-loaded time matrix (1175x1175). Loaded if not provided.
     strategy : str
         How to handle capacity overflow:
-        - "backtrack": go to nearest port, return to where you left off,
-          continue the planned route. (default)
+        - "backtrack": go to nearest port, then resume the planned route
+          from the station where the overflow happened. (default)
         - "forward": go to nearest port, then continue to the nearest
           unvisited station from that port (no backtracking).
         - "preemptive": return to nearest port when load reaches
@@ -69,9 +69,9 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         overflow_events : list[dict] — where each overflow happened
         strategy : str — which strategy was used
     """
-    if strategy not in ("backtrack", "forward", "preemptive"):
+    if strategy not in STRATEGIES:
         raise ValueError(f"Unknown strategy: {strategy!r}. "
-                         f"Use 'backtrack', 'forward', or 'preemptive'.")
+                         f"Choose from {sorted(STRATEGIES)}.")
 
     if time_matrix is None:
         time_matrix = _load_time_matrix()
@@ -109,24 +109,11 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
             station_ordinals.append(_node_to_station(non_port[i]))
             station_nodes.append(non_port[i])
 
-        if strategy == "forward":
-            detour_time = _walk_forward(
-                station_ordinals, station_nodes, catch_vector,
-                boat_capacity, port_nodes, time_matrix,
-                trip_idx, boat_id, overflow_events,
-            )
-        elif strategy == "preemptive":
-            detour_time = _walk_preemptive(
-                station_ordinals, station_nodes, catch_vector,
-                boat_capacity, preemptive_threshold, port_nodes, time_matrix,
-                trip_idx, boat_id, overflow_events,
-            )
-        else:  # backtrack
-            detour_time = _walk_backtrack(
-                station_ordinals, station_nodes, catch_vector,
-                boat_capacity, port_nodes, time_matrix,
-                trip_idx, boat_id, overflow_events,
-            )
+        detour_time = _run_strategy(
+            strategy, preemptive_threshold,
+            station_ordinals, station_nodes, catch_vector, boat_capacity,
+            port_nodes, time_matrix, trip_idx, boat_id, overflow_events,
+        )
 
         trip_exceeded = detour_time > 0
         trip_unscheduled = sum(
@@ -299,6 +286,38 @@ def _walk_preemptive(station_ordinals, station_nodes, catch_vector,
     return detour_time
 
 
+# ---------------------------------------------------------------------------
+# Strategy registry
+# ---------------------------------------------------------------------------
+
+# The overflow responses a boat can take, by name. Single place that knows
+# which strategies exist: evaluate_single_realisation validates against it and
+# the experiment CLIs read their --strategy choices from it. To add a fourth,
+# write a _walk_* function and add it here.
+STRATEGIES = {
+    "backtrack": _walk_backtrack,
+    "forward": _walk_forward,
+    "preemptive": _walk_preemptive,
+}
+
+
+def _run_strategy(strategy, preemptive_threshold, station_ordinals,
+                  station_nodes, catch_vector, boat_capacity, port_nodes,
+                  time_matrix, trip_idx, boat_id, overflow_events):
+    """Walk one trip under strategy and return the detour time it costs.
+
+    All three walkers take the same arguments except preemptive, which also
+    needs its trigger threshold. Keeping that difference here means the
+    registry stays a plain name -> function mapping.
+    """
+    walk = STRATEGIES[strategy]
+    head = (station_ordinals, station_nodes, catch_vector, boat_capacity)
+    tail = (port_nodes, time_matrix, trip_idx, boat_id, overflow_events)
+    if strategy == "preemptive":
+        return walk(*head, preemptive_threshold, *tail)
+    return walk(*head, *tail)
+
+
 def _find_nearest_port(station_node, port_nodes, time_matrix):
     """Find the nearest port to a station node by travel time.
 
@@ -323,7 +342,7 @@ class StochasticEvaluator:
     """Run Monte Carlo evaluation of a routing solution under catch uncertainty.
 
     Accepts either a CatchSimulator (Jess's module) or a pre-generated
-    scenario matrix so you can test without the simulator.
+    scenario matrix, which allows testing without the simulator.
 
     Parameters
     ----------
