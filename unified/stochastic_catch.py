@@ -95,6 +95,58 @@ def _load_station_map():
 
 
 # ---------------------------------------------------------------------------
+# Fit cache
+# ---------------------------------------------------------------------------
+# Cached because fitting takes ~138s and the inputs never change.
+
+_SMB_PATH = os.path.join(_ROOT, "gfsp_code", "data", "smb.2019.dat")
+_CACHE_PATH = os.path.join(_ROOT, ".cache", "catch_fit.npz")
+
+# Bump when anything stored changes, so old caches are rejected.
+_CACHE_VERSION = 1
+
+
+def _source_fingerprint(excel_path):
+    """Size and mtime of the two source files, so a stale cache is rejected."""
+    parts = [_CACHE_VERSION]
+    for path in (_SMB_PATH, excel_path):
+        stat = os.stat(path)
+        parts += [stat.st_size, stat.st_mtime_ns]
+    return np.array(parts, dtype=np.int64)
+
+
+def _load_fit_cache(excel_path):
+    """Return the cached fit, or None if absent, stale or unreadable."""
+    if not os.path.isfile(_CACHE_PATH):
+        return None
+    try:
+        with np.load(_CACHE_PATH) as data:
+            if not np.array_equal(data["fingerprint"],
+                                  _source_fingerprint(excel_path)):
+                return None
+            return {k: data[k] for k in
+                    ("means", "stds", "tiers", "midpoints", "tows")}
+    except (OSError, ValueError, KeyError):
+        # Truncated or from an older version -- just refit.
+        return None
+
+
+def _save_fit_cache(excel_path, means, stds, tiers, midpoints, tows):
+    os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
+    np.savez(_CACHE_PATH,
+             fingerprint=_source_fingerprint(excel_path),
+             means=means, stds=stds, tiers=tiers,
+             midpoints=midpoints, tows=tows)
+
+
+def _tows_to_maps(tows):
+    """Rebuild both dicts from the cached array -- they are exact inverses."""
+    ordinal_to_tow = {int(o): int(t) for o, t in enumerate(tows)}
+    tow_to_ordinal = {int(t): int(o) for o, t in enumerate(tows)}
+    return ordinal_to_tow, tow_to_ordinal
+
+
+# ---------------------------------------------------------------------------
 # Distribution fitting
 # ---------------------------------------------------------------------------
 
@@ -219,25 +271,48 @@ class CatchSimulator:
         self.midpoints = None
         self._fitted = False
 
-    def fit(self):
+    def fit(self, cache=True):
         """Fit distributions from the historical data.
 
         Loads smb.2019.dat for station mapping and the Excel file for
         historical catch observations.  Applies the 3-tier fallback.
+
+        Reading the workbook takes about 138 seconds and gives the same answer
+        every time, so the result is cached to disk and reused while the source
+        files are unchanged. Pass cache=False to force a real fit.
         """
-        self.ordinal_to_tow, self.tow_to_ordinal, self.midpoints = (
-            _load_station_map()
-        )
-        df = pd.read_excel(self.excel_path)
-        self.means, self.stds, self.tiers = _fit_distributions(
-            df, self.ordinal_to_tow, self.tow_to_ordinal, self.midpoints
-        )
+        cached = _load_fit_cache(self.excel_path) if cache else None
+
+        if cached is not None:
+            self.means = cached["means"]
+            self.stds = cached["stds"]
+            self.tiers = cached["tiers"]
+            self.midpoints = cached["midpoints"]
+            self.ordinal_to_tow, self.tow_to_ordinal = _tows_to_maps(
+                cached["tows"])
+            source = "cached"
+        else:
+            self.ordinal_to_tow, self.tow_to_ordinal, self.midpoints = (
+                _load_station_map()
+            )
+            df = pd.read_excel(self.excel_path)
+            self.means, self.stds, self.tiers = _fit_distributions(
+                df, self.ordinal_to_tow, self.tow_to_ordinal, self.midpoints
+            )
+            source = "fitted"
+            if cache:
+                tows = np.array([self.ordinal_to_tow[o]
+                                 for o in range(len(self.ordinal_to_tow))],
+                                dtype=np.int64)
+                _save_fit_cache(self.excel_path, self.means, self.stds,
+                                self.tiers, self.midpoints, tows)
+
         self._fitted = True
 
         tier_counts = {1: int((self.tiers == 1).sum()),
                        2: int((self.tiers == 2).sum()),
                        3: int((self.tiers == 3).sum())}
-        print(f"CatchSimulator fitted: {tier_counts[1]} direct, "
+        print(f"CatchSimulator {source}: {tier_counts[1]} direct, "
               f"{tier_counts[2]} regional, {tier_counts[3]} nearest-neighbour")
 
     def sample(self, n_scenarios=1000, station_ids=None):
