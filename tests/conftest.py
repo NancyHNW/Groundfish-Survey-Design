@@ -16,6 +16,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: tests that run solvers (may take 10-60s each)"
     )
+    config.addinivalue_line(
+        "markers", "full: tests against the real 581-station survey"
+    )
 
 
 BASELINES_PATH = os.path.join(os.path.dirname(__file__), "golden_baselines.json")
@@ -56,6 +59,58 @@ def save_baselines(data):
     text = json.dumps(data, indent=2, default=_json_safe)
     with open(BASELINES_PATH, "w") as f:
         f.write(text)
+
+
+_CATCH_LOADER_ATTR = "load_catch_fixed_random_assignment"
+_CATCH_LOADER_MODULES = ["data_loader", "classes", "neighbourhood_rules",
+                         "ant_colony_optimisation",
+                         "formulation_tester_functions"]
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _pristine_catch_loader():
+    """Capture the unpatched catch loader once, before any test runs.
+
+    Importing has to happen inside heuristic_context, since data_loader is
+    only importable with final_code on sys.path.
+    """
+    from unified.adapters import heuristic_context
+
+    with heuristic_context():
+        import data_loader  # noqa: F401  imported for the side effect
+
+    return {name: getattr(sys.modules[name], _CATCH_LOADER_ATTR)
+            for name in _CATCH_LOADER_MODULES
+            if name in sys.modules
+            and hasattr(sys.modules[name], _CATCH_LOADER_ATTR)}
+
+
+@pytest.fixture(autouse=True)
+def _restore_catch_loader(_pristine_catch_loader):
+    """Undo the catch-loader monkey-patch after every test.
+
+    to_heuristic_problem patches load_catch_fixed_random_assignment in
+    data_loader and in every module that did `from data_loader import *`, and
+    never restores it. That is deliberate in production -- Trip.__init__
+    reloads catch from disk, so the patch has to outlive the call that set it.
+
+    In a test session it leaks. Once any test asks for catch_source="gfsp",
+    every later test gets gfsp data whatever it asked for, so
+    catch_source="heuristic" silently returns the wrong array. The failure
+    depends on file ordering, which is why it surfaced only when a new test
+    file sorted ahead of test_unified.py.
+
+    Restoring has to target the *pristine* loader captured at session start,
+    not whatever was in place when this test began -- by then an earlier test
+    may already have patched it, and restoring that just reinstates the leak.
+    """
+    try:
+        yield
+    finally:
+        for name, original in _pristine_catch_loader.items():
+            mod = sys.modules.get(name)
+            if mod is not None:
+                setattr(mod, _CATCH_LOADER_ATTR, original)
 
 
 @pytest.fixture(scope="session")
