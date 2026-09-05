@@ -29,14 +29,16 @@ THRESHOLDS = (0.5, 0.6, 0.7, 0.8, 0.9)
 
 def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
         catch_source="historical", n_scenarios=500, scenario_seed=123,
-        capacity_buffer=1.0, sweep_thresholds=True):
+        capacity_buffer=1.0, sweep_thresholds=True, full=False,
+        home_ports=None):
     """Solve once, evaluate under each strategy, return the main table rows."""
     evaluator = make_evaluator(scenario_seed, n_scenarios)
 
     print(f"Solving once with {method}...")
     det = solve(ns=ns, nv=nv, cf=cf, instance=instance, method=method,
                 time_limit=time_limit, catch_source=catch_source,
-                capacity_buffer=capacity_buffer)
+                capacity_buffer=capacity_buffer, full=full,
+                home_ports=home_ports)
     trips, inst = det["trips"], det["instance"]
     planned = det["planned_time"]
     print(f"Planned {planned:.1f}h over {len(trips)} trips "
@@ -56,7 +58,8 @@ def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
     print(f"\nLowest mean realised time: {best['case']}")
 
     tag = f"{method}-strategies"
-    save_csv(rows, output_path("strategy-comparison", tag, inst, ".csv"))
+    save_csv(rows, output_path("strategy-comparison", tag, inst, ".csv",
+                               home_ports=home_ports))
 
     if sweep_thresholds:
         threshold_cases = [
@@ -70,7 +73,8 @@ def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
         print_table(sweep_rows, THRESHOLD_COLUMNS,
                     title="PREEMPTIVE THRESHOLD SWEEP")
         save_csv(sweep_rows,
-                 output_path("preemptive-threshold", tag, inst, ".csv"))
+                 output_path("preemptive-threshold", tag, inst, ".csv",
+                             home_ports=home_ports))
 
     return rows
 
@@ -91,4 +95,5 @@ if __name__ == "__main__":
         catch_source=args.catch_source, n_scenarios=args.n_scenarios,
         scenario_seed=args.scenario_seed,
         capacity_buffer=args.capacity_buffer,
-        sweep_thresholds=args.sweep_thresholds)
+        sweep_thresholds=args.sweep_thresholds, full=args.full,
+        home_ports=args.home_ports)

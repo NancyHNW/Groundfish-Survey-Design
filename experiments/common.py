@@ -28,11 +28,15 @@ OUTPUT_DIR = os.path.join(_ROOT, "tests", "outputs")
 # Output
 # ---------------------------------------------------------------------------
 
-def output_path(name, tag, inst=None, ext=".png"):
+def output_path(name, tag, inst=None, ext=".png", home_ports=None):
     """Build a path under tests/outputs/ from experiment, tag and problem size.
 
     e.g. output_path("buffer-comparison", "tabu_move-backtrack", inst, ".csv")
       -> tests/outputs/buffer-comparison_tabu_move-backtrack_ns100-nv2.csv
+
+    home_ports adds an hp0-6-10-12 segment, so a run with the vessels based in
+    different ports cannot silently overwrite a default one. Omitted when the
+    ports are the default, which keeps existing filenames unchanged.
 
     Folder is gitignored, these all get regenerated.
     """
@@ -40,6 +44,8 @@ def output_path(name, tag, inst=None, ext=".png"):
     parts = [name, tag]
     if inst is not None:
         parts.append(f"ns{inst.ns}-nv{inst.n_boats}")
+    if home_ports:
+        parts.append("hp" + "-".join(str(int(p)) for p in home_ports))
     return os.path.join(OUTPUT_DIR, "_".join(parts) + ext)
 
 
@@ -104,6 +110,9 @@ def solve(ns=100, nv=2, cf=125, instance=1, method="tabu_move",
 
     Wraps run_heuristic_on_gfsp, resolves the method alias and sums the planned
     time (every caller wanted that anyway).
+
+    Pass full=True through kwargs for the 581-station survey, in which case
+    ns/nv/cf/instance are ignored.
     """
     from unified.solve import run_heuristic_on_gfsp
 
@@ -293,6 +302,13 @@ def base_parser():
                          help="Capacity factor (default: 125)")
     problem.add_argument("--instance", type=int, default=1,
                          help="Instance number 1-30 (default: 1)")
+    problem.add_argument("--full", action="store_true",
+                         help="Run on the real 581-station survey. --ns/--nv/"
+                              "--cf/--instance are ignored")
+    problem.add_argument("--home-ports", nargs="+", type=int, default=None,
+                         help="Home port per vessel, in boat order, e.g. "
+                              "--home-ports 4 6 9 11. Default: every vessel "
+                              "shares the instance's home port")
 
     solver = p.add_argument_group("solver")
     solver.add_argument("--method", default="tabu_move", choices=list(METHODS),
@@ -331,12 +347,22 @@ def describe_run(name, args, omit=(), **extra):
     omit drops shared flags an experiment does not use. monte_carlo sweeps
     --methods, so printing the inherited --method would just be misleading.
     """
-    shared = {
-        "ns": args.ns, "nv": args.nv, "cf": args.cf,
-        "instance": args.instance, "method": args.method,
+    if getattr(args, "full", False):
+        # ns/nv/cf/instance are ignored on the full problem, so printing them
+        # would just be misleading.
+        shared = {"problem": "full 581-station survey"}
+    else:
+        shared = {"ns": args.ns, "nv": args.nv, "cf": args.cf,
+                  "instance": args.instance}
+    shared.update({
+        "method": args.method,
         "catch": args.catch_source, "scenarios": args.n_scenarios,
         "time_limit": f"{args.time_limit}s",
-    }
+    })
+    # Only when set, and it has to appear: a custom-home-port run is otherwise
+    # indistinguishable from a default one in both the banner and the filename.
+    if getattr(args, "home_ports", None):
+        shared["home_ports"] = args.home_ports
     bits = [f"{k}={v}" for k, v in shared.items() if k not in omit]
     bits += [f"{k}={v}" for k, v in extra.items()]
     print("=" * 78)

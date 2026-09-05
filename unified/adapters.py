@@ -86,6 +86,20 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic",
     node_indices = list(instance.station_ids_to_node_indices())
     if home_ports is None:
         home_ports = [instance.home_port] * instance.n_boats
+    else:
+        # Validated here rather than left to fail as an IndexError from inside
+        # Problem, well away from the mistake.
+        valid = sorted(int(p) for p in instance.port_ids)
+        if len(home_ports) != instance.n_boats:
+            raise ValueError(
+                f"home_ports has {len(home_ports)} entries but the instance "
+                f"has {instance.n_boats} vessels. Give one port per vessel, "
+                f"in boat order. Valid ports: {valid}")
+        unknown = sorted(set(int(h) for h in home_ports) - set(valid))
+        if unknown:
+            raise ValueError(
+                f"home_ports contains {unknown}, which are not ports of this "
+                f"instance. Valid ports: {valid}")
 
     prob = Problem(
         stations=node_indices,

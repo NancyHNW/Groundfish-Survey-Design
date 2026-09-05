@@ -21,7 +21,8 @@ DEFAULT_METHODS = ("grasp_only", "grasp_swap", "tabu_move")
 def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
         time_limit=10, catch_source="historical", strategy="backtrack",
         preemptive_threshold=0.8, n_scenarios=500, scenario_seed=123,
-        capacity_buffer=1.0, histograms=True):
+        capacity_buffer=1.0, histograms=True, full=False,
+        home_ports=None):
     """Solve with each method, evaluate against shared scenarios, return rows."""
     from unified.stochastic_eval import plot_monte_carlo, print_stochastic_summary
 
@@ -33,7 +34,8 @@ def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
             "method", methods, evaluator,
             strategy=strategy, preemptive_threshold=preemptive_threshold,
             ns=ns, nv=nv, cf=cf, instance=instance, time_limit=time_limit,
-            catch_source=catch_source, capacity_buffer=capacity_buffer):
+            catch_source=catch_source, capacity_buffer=capacity_buffer,
+            full=full, home_ports=home_ports):
         rows.append(row)
         inst = det["instance"]
 
@@ -41,7 +43,8 @@ def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
 
         if histograms:
             plot_monte_carlo(
-                result, save_path=output_path("monte-carlo-hist", method, inst),
+                result, save_path=output_path("monte-carlo-hist", method,
+                                              inst, home_ports=home_ports),
                 deterministic_time=det["planned_time"],
                 title_suffix=f"method: {method}")
 
@@ -56,7 +59,8 @@ def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
     print(f"\nLowest mean realised time: {best['method']}")
 
     tag = f"methods-{strategy}"
-    save_csv(rows, output_path("method-comparison", tag, inst, ".csv"))
+    save_csv(rows, output_path("method-comparison", tag, inst, ".csv",
+                               home_ports=home_ports))
 
     return rows
 
@@ -84,4 +88,5 @@ if __name__ == "__main__":
         catch_source=args.catch_source, strategy=args.strategy,
         preemptive_threshold=args.threshold, n_scenarios=args.n_scenarios,
         scenario_seed=args.scenario_seed,
-        capacity_buffer=args.capacity_buffer, histograms=args.histograms)
+        capacity_buffer=args.capacity_buffer, histograms=args.histograms,
+        full=args.full, home_ports=args.home_ports)

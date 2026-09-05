@@ -20,7 +20,7 @@ COLUMNS = ([("buffer", "buffer", 9, ".0%")] + CORE_COLUMNS
 def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
         catch_source="historical", strategy="backtrack",
         preemptive_threshold=0.8, n_scenarios=500, scenario_seed=123,
-        buffers=(0.7, 0.8, 0.9, 1.0)):
+        buffers=(0.7, 0.8, 0.9, 1.0), full=False, home_ports=None):
     """Solve at each buffer, evaluate against shared scenarios, return rows."""
     evaluator = make_evaluator(scenario_seed, n_scenarios)
 
@@ -30,7 +30,8 @@ def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
             "capacity_buffer", buffers, evaluator, key="buffer", fmt=".0%",
             strategy=strategy, preemptive_threshold=preemptive_threshold,
             ns=ns, nv=nv, cf=cf, instance=instance, method=method,
-            time_limit=time_limit, catch_source=catch_source):
+            time_limit=time_limit, catch_source=catch_source, full=full,
+            home_ports=home_ports):
         rows.append(row)
         inst = det["instance"]
         print(f"Planned {det['planned_time']:.1f}h over {len(det['trips'])} "
@@ -49,11 +50,13 @@ def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
         print("No buffer beat planning to full capacity on this instance.")
 
     tag = f"{method}-{strategy}"
-    save_csv(rows, output_path("buffer-comparison", tag, inst, ".csv"))
+    save_csv(rows, output_path("buffer-comparison", tag, inst, ".csv",
+                               home_ports=home_ports))
 
     from unified.stochastic_eval import plot_buffer_comparison
     plot_buffer_comparison(
-        rows, save_path=output_path("buffer-comparison", tag, inst),
+        rows, save_path=output_path("buffer-comparison", tag, inst,
+                                    home_ports=home_ports),
         title_suffix=(f"ns={ns}, nv={nv}, cf={cf}, {method}, {strategy}, "
                       f"{n_scenarios} scenarios, catch={catch_source}"))
 
@@ -76,4 +79,5 @@ if __name__ == "__main__":
         method=args.method, time_limit=args.time_limit,
         catch_source=args.catch_source, strategy=args.strategy,
         preemptive_threshold=args.threshold, n_scenarios=args.n_scenarios,
-        scenario_seed=args.scenario_seed, buffers=tuple(args.buffers))
+        scenario_seed=args.scenario_seed, buffers=tuple(args.buffers),
+        full=args.full, home_ports=args.home_ports)
