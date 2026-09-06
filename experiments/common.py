@@ -34,9 +34,8 @@ def output_path(name, tag, inst=None, ext=".png", home_ports=None):
     e.g. output_path("buffer-comparison", "tabu_move-backtrack", inst, ".csv")
       -> tests/outputs/buffer-comparison_tabu_move-backtrack_ns100-nv2.csv
 
-    home_ports adds an hp0-6-10-12 segment, so a run with the vessels based in
-    different ports cannot silently overwrite a default one. Omitted when the
-    ports are the default, which keeps existing filenames unchanged.
+    home_ports adds an hp0-6-10-12 segment so a custom-port run cannot
+    overwrite a default one. Omitted when the ports are the default.
 
     Folder is gitignored, these all get regenerated.
     """
@@ -348,8 +347,7 @@ def describe_run(name, args, omit=(), **extra):
     --methods, so printing the inherited --method would just be misleading.
     """
     if getattr(args, "full", False):
-        # ns/nv/cf/instance are ignored on the full problem, so printing them
-        # would just be misleading.
+        # ns/nv/cf/instance are ignored on the full problem.
         shared = {"problem": "full 581-station survey"}
     else:
         shared = {"ns": args.ns, "nv": args.nv, "cf": args.cf,
@@ -359,8 +357,7 @@ def describe_run(name, args, omit=(), **extra):
         "catch": args.catch_source, "scenarios": args.n_scenarios,
         "time_limit": f"{args.time_limit}s",
     })
-    # Only when set, and it has to appear: a custom-home-port run is otherwise
-    # indistinguishable from a default one in both the banner and the filename.
+    # Must appear, or a custom-port run looks identical to a default one.
     if getattr(args, "home_ports", None):
         shared["home_ports"] = args.home_ports
     bits = [f"{k}={v}" for k, v in shared.items() if k not in omit]

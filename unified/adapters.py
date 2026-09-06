@@ -87,8 +87,7 @@ def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic",
     if home_ports is None:
         home_ports = [instance.home_port] * instance.n_boats
     else:
-        # Validated here rather than left to fail as an IndexError from inside
-        # Problem, well away from the mistake.
+        # Validated here -- otherwise it fails as an IndexError inside Problem.
         valid = sorted(int(p) for p in instance.port_ids)
         if len(home_ports) != instance.n_boats:
             raise ValueError(

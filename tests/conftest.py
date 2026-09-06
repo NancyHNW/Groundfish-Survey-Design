@@ -69,11 +69,7 @@ _CATCH_LOADER_MODULES = ["data_loader", "classes", "neighbourhood_rules",
 
 @pytest.fixture(autouse=True, scope="session")
 def _pristine_catch_loader():
-    """Capture the unpatched catch loader once, before any test runs.
-
-    Importing has to happen inside heuristic_context, since data_loader is
-    only importable with final_code on sys.path.
-    """
+    """Capture the unpatched catch loader once, before any test runs."""
     from unified.adapters import heuristic_context
 
     with heuristic_context():
@@ -89,20 +85,10 @@ def _pristine_catch_loader():
 def _restore_catch_loader(_pristine_catch_loader):
     """Undo the catch-loader monkey-patch after every test.
 
-    to_heuristic_problem patches load_catch_fixed_random_assignment in
-    data_loader and in every module that did `from data_loader import *`, and
-    never restores it. That is deliberate in production -- Trip.__init__
-    reloads catch from disk, so the patch has to outlive the call that set it.
-
-    In a test session it leaks. Once any test asks for catch_source="gfsp",
-    every later test gets gfsp data whatever it asked for, so
-    catch_source="heuristic" silently returns the wrong array. The failure
-    depends on file ordering, which is why it surfaced only when a new test
-    file sorted ahead of test_unified.py.
-
-    Restoring has to target the *pristine* loader captured at session start,
-    not whatever was in place when this test began -- by then an earlier test
-    may already have patched it, and restoring that just reinstates the leak.
+    to_heuristic_problem patches it globally and never restores it, so without
+    this one test asking for catch_source="gfsp" leaks gfsp data into every
+    later test. Restores the pristine loader, not whatever this test started
+    with -- that may already be patched.
     """
     try:
         yield
