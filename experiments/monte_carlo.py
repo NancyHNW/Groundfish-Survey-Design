@@ -18,6 +18,16 @@ COLUMNS = ([("method", "method", 14, "")] + CORE_COLUMNS
 DEFAULT_METHODS = ("grasp_only", "grasp_swap", "tabu_move")
 
 
+def _figure_context(method, strategy, inst, capacity_buffer):
+    """What the figure needs to identify itself once it is a file on disk."""
+    size = ("full 581-station survey" if inst.ns > 500
+            else f"ns{inst.ns}, nv{inst.n_boats}")
+    bits = [size, f"{method}", f"{strategy}"]
+    if capacity_buffer != 1.0:
+        bits.append(f"buffer {capacity_buffer:.0%}")
+    return ", ".join(bits)
+
+
 def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
         time_limit=10, catch_source="historical", strategy="backtrack",
         preemptive_threshold=0.8, n_scenarios=500, scenario_seed=123,
@@ -46,7 +56,8 @@ def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
                 result, save_path=output_path("monte-carlo-hist", method,
                                               inst, home_ports=home_ports),
                 deterministic_time=det["planned_time"],
-                title_suffix=f"method: {method}")
+                title_suffix=_figure_context(method, strategy, inst,
+                                             capacity_buffer))
 
     # Re-centre on the first method listed, usually the weakest one
     add_baseline_delta(rows, "method", methods[0], "vs_first")

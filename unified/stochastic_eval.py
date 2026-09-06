@@ -562,13 +562,10 @@ def plot_monte_carlo(stoch_result, save_path=None, deterministic_time=None,
                 label=f"5th: {td['p5']:.1f}")
     ax1.axvline(td["p95"], color="orange", linestyle="--", linewidth=1.5,
                 label=f"95th: {td['p95']:.1f}")
-    ax1.set_xlabel("Total Survey Time")
-    ax1.set_ylabel("Frequency")
-    hist_title = f"Total Time Distribution ({stoch_result['n_simulations']} simulations)"
-    if title_suffix:
-        hist_title += f"\n{title_suffix}"
-    ax1.set_title(hist_title)
-    ax1.legend()
+    ax1.set_xlabel("Total survey time (hours)")
+    ax1.set_ylabel("Scenarios")
+    ax1.set_title("Realised survey time", fontsize=11)
+    ax1.legend(fontsize=8)
 
     # --- Right: unscheduled returns histogram ---
     returns = [r["n_unscheduled_returns"] for r in stoch_result["all_results"]]
@@ -578,12 +575,131 @@ def plot_monte_carlo(stoch_result, save_path=None, deterministic_time=None,
     ax2.axvline(stoch_result["expected_unscheduled_returns"], color="red",
                 linestyle="-", linewidth=2,
                 label=f"Mean: {stoch_result['expected_unscheduled_returns']:.1f}")
-    ax2.set_xlabel("Number of Unscheduled Port Returns")
-    ax2.set_ylabel("Frequency")
-    ax2.set_title("Unscheduled Returns Distribution")
-    ax2.legend()
+    ax2.set_xlabel("Unscheduled port returns per season")
+    ax2.set_ylabel("Scenarios")
+    ax2.set_title("Overflow returns", fontsize=11)
+    ax2.legend(fontsize=8)
 
-    plt.tight_layout()
+    # One heading over both panels carrying the run that produced them --
+    # panel titles alone leave a saved figure with no record of which run.
+    heading = f"Monte Carlo over {stoch_result['n_simulations']} catch scenarios"
+    if title_suffix:
+        heading += f"  --  {title_suffix}"
+    fig.suptitle(heading, fontsize=12)
+
+    # Both y-axes count scenarios, so fractional ticks are meaningless.
+    from matplotlib.ticker import MaxNLocator
+    for ax in (ax1, ax2):
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.grid(alpha=0.25, linewidth=0.6, axis="y")
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    if save_path:
+        plt.savefig(save_path, dpi=200)
+        print(f"Saved plot to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+# Categorical palette, fixed order, one hue per strategy. Validated for
+# colour-vision deficiency: worst adjacent pair is dE 9.1 under protanopia.
+# Do not reorder or substitute without re-checking.
+_STRATEGY_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
+_INK = "#0b0b0b"
+_MUTED = "#898781"
+
+
+def plot_sweep_grid(rows, save_path=None, title_suffix=None):
+    """Buffer against realised time, one line per overflow strategy.
+
+    The point of the grid is the interaction: whether the best strategy changes
+    as the buffer tightens. Lines crossing say it does.
+
+    Parameters
+    ----------
+    rows : list of dict
+        One per (buffer, strategy) cell, with keys buffer, case, planned,
+        mean, returns_per_trip.
+    """
+    buffers = sorted({r["buffer"] for r in rows})
+    cases = list(dict.fromkeys(r["case"] for r in rows))  # keeps sweep order
+    x = [b * 100 for b in buffers]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+    # Planned time is the floor every strategy is measured against, so it is a
+    # reference line rather than a fifth series -- hence grey and dashed.
+    planned = [next(r["planned"] for r in rows if r["buffer"] == b)
+               for b in buffers]
+    ax1.plot(x, planned, "s--", color=_MUTED, linewidth=1.5, markersize=6,
+             label="Planned (no overflow)", zorder=2)
+
+    # Distinct marker per series. backtrack and forward often coincide exactly
+    # -- they make the same returns, differing only in what happens after -- so
+    # without this one line hides completely under the other.
+    markers = ["o", "s", "^", "D"]
+    ends = []
+
+    for i, case in enumerate(cases):
+        colour = _STRATEGY_COLOURS[i % len(_STRATEGY_COLOURS)]
+        marker = markers[i % len(markers)]
+        series = {r["buffer"]: r for r in rows if r["case"] == case}
+
+        means = [series[b]["mean"] for b in buffers]
+        ax1.plot(x, means, marker=marker, linestyle="-", color=colour,
+                 linewidth=2, markersize=8, label=case, zorder=3,
+                 markerfacecolor="none" if i % 2 else colour)
+        ends.append((means[-1], case, colour))
+
+        rpt = [series[b]["returns_per_trip"] for b in buffers]
+        ax2.plot(x, rpt, marker=marker, linestyle="-", color=colour,
+                 linewidth=2, markersize=8, label=case, zorder=3,
+                 markerfacecolor="none" if i % 2 else colour)
+
+    # Direct labels as well as the legend, so identity never rests on colour
+    # alone. Nudged apart where the series end too close to read.
+    span = max(r["mean"] for r in rows) - min(r["mean"] for r in rows)
+    gap = span * 0.045
+    placed = []
+    for y, case, colour in sorted(ends):
+        if placed and y - placed[-1] < gap:
+            y = placed[-1] + gap
+        placed.append(y)
+        ax1.annotate(case, (x[-1], y), textcoords="offset points",
+                     xytext=(10, 0), fontsize=8, color=_INK,
+                     va="center", annotation_clip=False)
+
+    best = min(rows, key=lambda r: r["mean"])
+    ax1.set_title(f"Mean realised time  (best: {best['case']} at "
+                  f"{best['buffer']:.0%}, {best['mean']:.0f}h)", fontsize=10)
+    ax1.set_xlabel("Planning buffer (% of true capacity)")
+    ax1.set_ylabel("Survey time (hours)")
+    ax1.legend(fontsize=8, loc="best")
+
+    ax2.set_title("Unscheduled returns per trip", fontsize=10)
+    ax2.set_xlabel("Planning buffer (% of true capacity)")
+    ax2.set_ylabel("Returns per trip")
+    ax2.legend(fontsize=8, loc="best")
+
+    for ax in (ax1, ax2):
+        ax.set_xticks(x)
+        ax.grid(alpha=0.25, linewidth=0.6)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+    # Room for the direct labels hanging off the right of the left panel
+    ax1.margins(x=0.12)
+
+    if title_suffix:
+        fig.suptitle(title_suffix, fontsize=10)
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+    else:
+        plt.tight_layout()
+
     if save_path:
         plt.savefig(save_path, dpi=200)
         print(f"Saved plot to {save_path}")
@@ -998,8 +1114,8 @@ def plot_time_comparison(solution_trips, result, save_path=None):
                          ha="center", fontsize=8, color="red", fontweight="bold")
 
     ax1.set_xlabel("Trip")
-    ax1.set_ylabel("Time")
-    ax1.set_title("Per-Trip: Planned vs Actual Time")
+    ax1.set_ylabel("Time (hours)")
+    ax1.set_title("Planned vs actual, per trip", fontsize=11)
     ax1.set_xticks(x)
     ax1.set_xticklabels(labels, fontsize=8)
     ax1.legend()
@@ -1018,8 +1134,8 @@ def plot_time_comparison(solution_trips, result, save_path=None):
                      textcoords="offset points", ha="center",
                      fontsize=10, color="red", fontweight="bold")
 
-    ax2.set_ylabel("Time")
-    ax2.set_title("Total Survey Time")
+    ax2.set_ylabel("Time (hours)")
+    ax2.set_title("Season total", fontsize=11)
     ax2.set_xticks([0, 1])
     ax2.set_xticklabels(bar_labels)
 
