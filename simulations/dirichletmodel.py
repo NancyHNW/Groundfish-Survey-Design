@@ -1,53 +1,52 @@
 # ============================================================
 # Dirichlet Catch Model
 # How it works:
-#   1. Predict the total catch for the year, then
-#   2. Model the composition of that total catch across stations using historical proportions.
+#   1. Each 'dimension' of the model is a year's catch for a single station
+#   2. Each historical year is equally likely to be chosen/sampled. 
+#   3. The generated proportions will then be the % of a sampled catch made of up to a year historical data.
 # ============================================================
 
-# ============================================================
-# Function 1: Construct year x Station catch table
-# ============================================================
+import numpy as np
+import pandas as pd
 
+df = pd.read_excel('data/spring_historical_english.xlsx')
 
-# ============================================================
-# Function 2: Calculate total catch for each year
-# ============================================================
+# GENERATED CODE, HAVENT LOOKED THRU YET:
+def simulate_station_catch(historical_catches, alpha=1.0, n_simulations=1):
+    """
+    Simulate catch for one station using a symmetric Dirichlet model.
 
+    Parameters
+    ----------
+    historical_catches : array-like
+        Historical catches for the station.
+    alpha : float
+        Dirichlet concentration parameter.
+    n_simulations : int
+        Number of simulated catches.
 
-# ============================================================
-# Function 2: Calculate each station's proportions
-# ============================================================
+    Returns
+    -------
+    simulated_catches : numpy array
+        Simulated catches.
+    proportions : numpy array
+        Dirichlet proportions used for each simulation.
+    """
 
-# ============================================================
-# Function 4: Create historical composition matrix
-# Each row sum to 1, each column is a station
-# ============================================================
+    historical_catches = np.asarray(historical_catches)
 
+    n_years = len(historical_catches)
 
-# ============================================================
-# Function 5: Summarise station proportions 
-# Calc for each station: mean, std, and 95% CI of proportions across years, min, max etc.
-# ============================================================
+    # Equal likelihood for every historical year
+    alpha_vector = np.full(n_years, alpha)
 
-# ============================================================
-# Function 6 & 7 & 8: Visualise proportions (overtime, mean, distribution of proportions)
-# ============================================================
+    # Generate Dirichlet proportions
+    proportions = np.random.dirichlet(
+        alpha_vector,
+        size=n_simulations
+    )
 
-# ============================================================
-# Function 9: Estimate Dirichlet params & Fit model 
-# ============================================================
+    # Weighted combination of historical catches
+    simulated_catches = proportions @ historical_catches
 
-
-# ============================================================
-# Function 10: Generate simulated station proportions 
-# ============================================================
-
-
-# ============================================================
-# Function 11: Predict total catch (this year)
-# ============================================================
-
-# ============================================================
-# Function 12: Combine total catch & proportions to get estimated catch per station
-# ============================================================
+    return simulated_catches, proportions
