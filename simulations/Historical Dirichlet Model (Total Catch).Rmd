@@ -1,0 +1,608 @@
+---
+title: "Dirichlet Model"
+author: "Jessica Zeng"
+date: "2026-08-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Install once if necessary
+install.packages("readxl")
+install.packages("dplyr")
+install.packages("tidyr")
+install.packages("sirt")
+```
+
+
+```{r}
+# Load packages
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(sirt)
+library(ggplot2)
+```
+
+
+```{r}
+# File location
+file_path <- "./data/spring_historical_english.xlsx"
+
+# Read data
+df <- read_excel(file_path)
+
+# Look at the data
+head(df)
+names(df)
+```
+
+Calculate total catch for each year
+```{r}
+year_total_catch <- df %>%
+  group_by(year) %>%
+  summarise(
+    total_catch = sum(catch, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+head(year_total_catch)
+```
+
+Join total catch back to OG data
+```{r}
+df_proportions <- df %>%
+  left_join(year_total_catch, by = "year")
+
+head(df_proportions)
+```
+
+Calculate each stations proportion of yearly catch
+```{r}
+df_proportions <- df_proportions %>%
+  mutate(
+    proportion = catch / total_catch
+  )
+
+
+head(df_proportions)
+```
+
+Convert to year by station matrix
+```{r}
+proportion_table <- df_proportions %>%
+  select(year, tow_station, proportion) %>%
+  pivot_wider(
+    names_from = tow_station,
+    values_from = proportion,
+    values_fill = 0
+  ) %>%
+  arrange(year)
+
+head(proportion_table)
+```
+
+Ensure each year sums to 1
+```{r}
+row_sums <- proportion_table %>%
+  select(-year) %>%
+  rowSums()
+
+summary(row_sums)
+all(abs(row_sums - 1) < 1e-10)
+```
+
+Create matrix for Dirichlet Model
+```{r}
+proportion_matrix <- proportion_table %>%
+  select(-year) %>%
+  as.matrix()
+
+dim(proportion_matrix)
+```
+38 518 means we have 35 years and 518 stations
+
+## Fit Dirichlet Model
+```{r}
+dirichlet_fit <- dirichlet.mle(proportion_matrix)
+```
+
+Get alpha values and put them in a dataframe
+```{r}
+alpha <- dirichlet_fit$alpha
+
+alpha_table <- data.frame(
+  tow_station = colnames(proportion_matrix),
+  alpha = as.numeric(alpha)
+)
+
+head(alpha_table)
+```
+
+
+Get expected proportion for each station
+E[p_i] = alpha_i / sum of all alpha
+```{r}
+expected_proportions <- dirichlet_fit$xsi
+
+expected_table <- data.frame(
+  tow_station = colnames(proportion_matrix),
+  expected_proportion = as.numeric(expected_proportions)
+)
+
+head(expected_table)
+```
+
+Comparison:
+Historical average vs fitted Dirichlet expectation
+```{r}
+historical_means <- colMeans(proportion_matrix)
+
+comparison <- data.frame(
+  tow_station = colnames(proportion_matrix),
+  historical_mean = historical_means,
+  dirichlet_mean = as.numeric(dirichlet_fit$xsi),
+  alpha = as.numeric(dirichlet_fit$alpha)
+)
+
+head(comparison)
+```
+They should look similar but will not necessarily be the same
+
+Check concentration param
+```{r}
+alpha0 <- dirichlet_fit$alpha0
+
+alpha0
+```
+
+Tells us about the amount of variation the fitted Dirichlet has around its expected proportions.
+
+Alpha a0 = 754.0381
+This means historical proportions tend to stay relatively close to their expected proportions, rather than varying extremely widely. 
+
+Formula: 
+alpha_0 = sum of all alphas
+E[p_i] = alpha_i / alpha_0
+
+
+
+## Generate simulated years
+Once the model is fitted, we can generate station-proportion vectos
+```{r}
+#Adjust this accordingly. Here for 10000 years
+n_sim <- 10000
+
+alpha_matrix <- matrix(
+  alpha,
+  nrow = n_sim,
+  ncol = length(alpha),
+  byrow = TRUE
+)
+
+simulated_proportions <- dirichlet.simul(alpha_matrix)
+```
+
+```{r}
+dim(simulated_proportions)
+```
+Each row will be a possible future year.
+
+```{r}
+simulated_proportions <- as.data.frame(simulated_proportions)
+
+colnames(simulated_proportions) <- colnames(proportion_matrix)
+
+head(simulated_proportions)
+```
+
+Add simulation ID
+```{r}
+simulated_proportions <- simulated_proportions %>%
+  mutate(simulation = row_number()) %>%
+  select(simulation, everything())
+
+head(simulated_proportions)
+
+```
+
+Individual station checks
+```{r}
+station <- "31501"
+
+historical_min <- min(proportion_matrix[, station], na.rm = TRUE)
+historical_max <- max(proportion_matrix[, station], na.rm = TRUE)
+
+simulated_min <- min(simulated_proportions[[station]], na.rm = TRUE)
+simulated_max <- max(simulated_proportions[[station]], na.rm = TRUE)
+
+c(
+  historical_min = historical_min,
+  historical_max = historical_max,
+  simulated_min = simulated_min,
+  simulated_max = simulated_max
+)
+```
+
+
+Write to new file
+```{r}
+write.csv(
+  simulated_proportions,
+  "simulated_dirichlet_proportions.csv",
+  row.names = FALSE
+)
+```
+
+## Visualisations
+
+### Visualisation 1: One station histroical vs 10000 simulations
+```{r}
+# Choose a station
+station <- "31501"
+
+# Historical proportions
+historical_station <- data.frame(
+  proportion = proportion_matrix[, station]
+)
+
+# Simulated proportions
+simulated_station <- data.frame(
+  proportion = simulated_proportions[[station]]
+)
+
+# Historical min/max
+historical_min <- min(historical_station$proportion, na.rm = TRUE)
+historical_max <- max(historical_station$proportion, na.rm = TRUE)
+
+ggplot(simulated_station, aes(x = proportion)) +
+  
+  # Dirichlet simulations
+  geom_histogram(
+    aes(fill = "Dirichlet simulations"),
+    bins = 50,
+    boundary = 0,
+    alpha = 0.7
+  ) +
+  
+  # Historical minimum
+  geom_vline(
+    aes(
+      xintercept = historical_min,
+      linetype = "Historical minimum"
+    ),
+    colour = "black"
+  ) +
+  
+  # Historical maximum
+  geom_vline(
+    aes(
+      xintercept = historical_max,
+      linetype = "Historical maximum"
+    ),
+    colour = "black"
+  ) +
+  
+  # Historical observations
+  geom_rug(
+    data = historical_station,
+    aes(
+      x = proportion,
+      colour = "Historical observations"
+    ),
+    inherit.aes = FALSE,
+    sides = "b",
+    linewidth = 1
+  ) +
+  
+  scale_fill_manual(
+    name = "Data",
+    values = c("Dirichlet simulations" = "steelblue")
+  ) +
+  
+  scale_colour_manual(
+    name = "Data",
+    values = c("Historical observations" = "firebrick")
+  ) +
+  
+  scale_linetype_manual(
+    name = "Historical range",
+    values = c(
+      "Historical minimum" = "dashed",
+      "Historical maximum" = "dashed"
+    )
+  ) +
+  
+  labs(
+    title = paste("Historical vs Dirichlet simulations for station:", station),
+    x = "Station proportion of total catch",
+    y = "Number of simulations"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+```
+Another station
+```{r}
+# Choose a station
+station <- "47404"
+
+# Historical proportions
+historical_station <- data.frame(
+  proportion = proportion_matrix[, station]
+)
+
+# Simulated proportions
+simulated_station <- data.frame(
+  proportion = simulated_proportions[[station]]
+)
+
+# Historical min/max
+historical_min <- min(historical_station$proportion, na.rm = TRUE)
+historical_max <- max(historical_station$proportion, na.rm = TRUE)
+
+ggplot(simulated_station, aes(x = proportion)) +
+  
+  # Dirichlet simulations
+  geom_histogram(
+    aes(fill = "Dirichlet simulations"),
+    bins = 50,
+    boundary = 0,
+    alpha = 0.7
+  ) +
+  
+  # Historical minimum
+  geom_vline(
+    aes(
+      xintercept = historical_min,
+      linetype = "Historical minimum"
+    ),
+    colour = "black"
+  ) +
+  
+  # Historical maximum
+  geom_vline(
+    aes(
+      xintercept = historical_max,
+      linetype = "Historical maximum"
+    ),
+    colour = "black"
+  ) +
+  
+  # Historical observations
+  geom_rug(
+    data = historical_station,
+    aes(
+      x = proportion,
+      colour = "Historical observations"
+    ),
+    inherit.aes = FALSE,
+    sides = "b",
+    linewidth = 1
+  ) +
+  
+  scale_fill_manual(
+    name = "Data",
+    values = c("Dirichlet simulations" = "steelblue")
+  ) +
+  
+  scale_colour_manual(
+    name = "Data",
+    values = c("Historical observations" = "firebrick")
+  ) +
+  
+  scale_linetype_manual(
+    name = "Historical range",
+    values = c(
+      "Historical minimum" = "dashed",
+      "Historical maximum" = "dashed"
+    )
+  ) +
+  
+  labs(
+    title = paste("Historical vs Dirichlet simulations for station:", station),
+    x = "Station proportion of total catch",
+    y = "Number of simulations"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+```
+
+Compare historical & simulated distributions across all stations
+```{r}
+historical_summary <- data.frame(
+  tow_station = colnames(proportion_matrix),
+  mean = colMeans(proportion_matrix),
+  sd = apply(proportion_matrix, 2, sd),
+  min = apply(proportion_matrix, 2, min),
+  max = apply(proportion_matrix, 2, max)
+)
+
+simulated_summary <- data.frame(
+  tow_station = colnames(simulated_proportions),
+  mean = sapply(simulated_proportions, mean),
+  sd = sapply(simulated_proportions, sd),
+  min = sapply(simulated_proportions, min),
+  max = sapply(simulated_proportions, max)
+)
+
+comparison_summary <- historical_summary %>%
+  rename(
+    historical_mean = mean,
+    historical_sd = sd,
+    historical_min = min,
+    historical_max = max
+  ) %>%
+  left_join(
+    simulated_summary %>%
+      rename(
+        simulated_mean = mean,
+        simulated_sd = sd,
+        simulated_min = min,
+        simulated_max = max
+      ),
+    by = "tow_station"
+  )
+```
+
+Historical mean vs Dirichlet simulated mean
+```{r}
+ggplot(
+  comparison_summary,
+  aes(x = historical_mean, y = simulated_mean)
+) +
+  geom_point(
+    aes(colour = "Station"),
+    alpha = 0.7,
+    size = 2
+  ) +
+ geom_abline(
+  slope = 1,
+  intercept = 0,
+  aes(linetype = "Perfect agreement"),
+  colour = "black"
+  ) +
+  scale_colour_manual(
+    name = "Data",
+    values = c("Station" = "steelblue")
+  ) +
+  scale_linetype_manual(
+    name = "Reference",
+    values = c("Perfect agreement" = "dashed")
+  ) +
+  labs(
+    title = "Historical vs Dirichlet Mean Proportions",
+    x = "Historical mean proportion",
+    y = "Dirichlet simulated mean proportion"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+```
+
+
+```{r}
+ggplot(
+  comparison_summary,
+  aes(x = historical_sd, y = simulated_sd)
+) +
+  geom_point(
+    aes(colour = "Station"),
+    alpha = 0.7,
+    size = 2
+  ) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    aes(linetype = "Perfect agreement"),
+    colour = "black"
+  ) +
+  scale_colour_manual(
+    name = "Data",
+    values = c("Station" = "steelblue")
+  ) +
+  scale_linetype_manual(
+    name = "Reference",
+    values = c("Perfect agreement" = "dashed")
+  ) +
+  labs(
+    title = "Historical vs Dirichlet Variability",
+    x = "Historical standard deviation",
+    y = "Dirichlet simulated standard deviation"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+```
+
+Historical minimum vs Dirichlet simulated minimum
+```{r}
+ggplot(
+  comparison_summary,
+  aes(x = historical_min, y = simulated_min)
+) +
+  geom_point(
+    aes(colour = "Station"),
+    alpha = 0.7,
+    size = 2
+  ) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    aes(linetype = "Perfect agreement"),
+    colour = "black"
+  ) +
+  scale_colour_manual(
+    name = "Data",
+    values = c("Station" = "steelblue")
+  ) +
+  scale_linetype_manual(
+    name = "Reference",
+    values = c("Perfect agreement" = "dashed")
+  ) +
+  labs(
+    title = "Historical vs Dirichlet Minimum Proportions",
+    x = "Historical minimum proportion",
+    y = "Dirichlet simulated minimum proportion"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+```
+
+
+Historical maximum vs Dirichlet simulated maximum
+
+```{r}
+ggplot(
+  comparison_summary,
+  aes(x = historical_max, y = simulated_max)
+) +
+  geom_point(
+    aes(colour = "Station"),
+    alpha = 0.7,
+    size = 2
+  ) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    aes(linetype = "Perfect agreement"),
+    colour = "black"
+  ) +
+  scale_colour_manual(
+    name = "Data",
+    values = c("Station" = "steelblue")
+  ) +
+  scale_linetype_manual(
+    name = "Reference",
+    values = c("Perfect agreement" = "dashed")
+  ) +
+  labs(
+    title = "Historical vs Dirichlet Maximum Proportions",
+    x = "Historical maximum proportion",
+    y = "Dirichlet simulated maximum proportion"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+```
+
+## VERIFYING
+Use this model to predict catch in one year.
+```{r}
+
+
+```
+

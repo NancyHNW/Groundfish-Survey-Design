@@ -1,0 +1,492 @@
+---
+title: "Station by Station Historical Model"
+author: "Jessica Zeng"
+date: "2026-09-10"
+output: html_document
+---
+
+```{r}
+# Install once if necessary
+install.packages("readxl")
+install.packages("dplyr")
+install.packages("tidyr")
+install.packages("sirt")
+install.packages("MCMCpack")
+```
+
+
+```{r}
+# Load packages
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(sirt)
+library(ggplot2)
+library(MCMCpack)
+```
+
+```{r}
+set.seed(566)
+```
+
+
+Reading in Data
+```{r}
+file_path <- "./data/spring_historical_english.xlsx"
+df <- read_excel(file_path)
+head(df)
+names(df)
+```
+
+Extract only columns we want
+```{r}
+# df %>%
+#   dplyr::select(year, tow_station, catch) %>%
+#   head(20)
+df <- df[, c("year", "tow_station", "catch")]
+```
+
+Check for missing values
+```{r}
+df %>%
+  summarise(
+    missing_year = sum(is.na(year)),
+    missing_station = sum(is.na(tow_station)),
+    missing_catch = sum(is.na(catch))
+  )
+```
+
+Plot total catch
+```{r}
+annual_catch <- df %>%
+  group_by(year) %>%
+  summarise(
+    total_catch = sum(catch, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(annual_catch, aes(x = year, y = total_catch)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = "Total Catch Across All Stations by Year",
+    x = "Year",
+    y = "Total Catch (kg)"
+  ) +
+  theme_minimal()
+```
+Truncate starting from year 2002
+```{r}
+truncation_year <- 2002
+
+df_truncated <- df %>%
+  filter(year <= truncation_year)
+```
+
+
+Station by year catch matrix
+```{r}
+catch_matrix <- df[, c("year", "tow_station", "catch")] %>%
+  pivot_wider(
+    names_from = tow_station,
+    values_from = catch
+  )
+
+head(catch_matrix)
+```
+
+Dirichlet function - rdirichlet
+- A Dirichlet random vector can be generated using independent Gamma random variables X_i = Gamma (alpha_i, 1)
+- The function allows us to generate random numbers that sum up to 1. 
+n = how many dirichlet random vectors we want to generate. i.e sets of proportions
+alpha = (1,1,...,1,1) means all elements in the array have the same concentration parameter. 
+
+
+## Apply to ONE station
+```{r}
+example_station <- df %>%
+  filter(tow_station == unique(df$tow_station)[3]) %>%
+  .[, c("year", "tow_station", "catch")] %>%
+  filter(!is.na(catch)) %>%
+  arrange(year)
+
+example_station
+```
+
+
+Extract historical catch
+```{r}
+historical_catch <- example_station$catch
+historical_catch
+```
+Generate Dirichlet distributions
+```{r}
+alpha <- rep(1, length(historical_catch))
+
+
+proportions <- rdirichlet(
+  n = 1,
+  alpha = alpha
+)
+
+proportions
+```
+Explanation: these proportions are the proportions across multiple years catch for ONE station. 
+
+```{r}
+simulated_catch <- sum(
+  historical_catch * proportions
+)
+
+simulated_catch
+```
+
+Generate many simlations for one station
+```{r}
+n_simulations <- 100
+
+proportions <- rdirichlet(
+  n = n_simulations,
+  alpha = rep(1, length(historical_catch))
+)
+```
+
+Proportions is now a matrix
+- Each row: A simulation 
+- Each column: Each year
+
+```{r}
+simulated_catches <- proportions %*% historical_catch
+
+simulated_catches <- as.vector(simulated_catches)
+
+summary(simulated_catches)
+```
+
+
+Compare with historical catch for the same station:
+```{r}
+summary(historical_catch)
+```
+```{r}
+simulation_df <- data.frame(
+  catch = simulated_catches
+)
+
+ggplot() +
+  geom_histogram(
+    data = data.frame(catch = historical_catch),
+    aes(x = catch, fill = "Historical"),
+    bins = 20,
+    alpha = 0.5
+  ) +
+  geom_histogram(
+    data = simulation_df,
+    aes(x = catch, fill = "Simulated"),
+    bins = 20,
+    alpha = 0.5
+  ) +
+  labs(
+    title = "Historical vs Simulated Catch",
+    x = "Catch",
+    y = "Frequency",
+    fill = "Data"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Historical" = "steelblue",
+      "Simulated" = "orange"
+    )
+  ) +
+  theme_minimal()
+```
+
+```{r}
+example_station <- df %>%
+  filter(tow_station == unique(df$tow_station)[1]) %>%
+  .[, c("year", "tow_station", "catch")] %>%
+  filter(!is.na(catch)) %>%
+  arrange(year)
+
+random_year <- sample(
+  truncation_year:2020,
+  1
+)
+
+historical_value <- example_station %>%
+  filter(year == random_year) %>%
+  pull(catch)
+
+random_year
+historical_value
+
+
+lower_95 <- quantile(simulated_catches, 0.025)
+upper_95 <- quantile(simulated_catches, 0.975)
+```
+
+
+```{r}
+simulation_df <- data.frame(
+  catch = simulated_catches
+)
+
+ggplot(simulation_df, aes(x = catch)) +
+  
+  # Simulated catch distribution
+  geom_histogram(
+    bins = 50,
+    fill = "steelblue",
+    alpha = 0.7
+  ) +
+  
+  # 95% confidence/credible interval
+  geom_vline(
+    xintercept = lower_95,
+    linetype = "dashed",
+    linewidth = 0.8
+  ) +
+  geom_vline(
+    xintercept = upper_95,
+    linetype = "dashed",
+    linewidth = 0.8
+  ) +
+  
+  # Historical catch
+  geom_vline(
+    xintercept = historical_value,
+    linewidth = 1.2
+  ) +
+  
+  labs(
+    title = paste(
+      "Simulated Catch vs Historical Catch — Year",
+      random_year
+    ),
+    subtitle = paste(
+      "95% simulation interval:",
+      round(lower_95, 1), "–", round(upper_95, 1), "kg"
+    ),
+    x = "Catch (kg)",
+    y = "Frequency"
+  ) +
+  
+  theme_minimal()
+```
+
+## Verifying
+How often do we fall inside the interval?
+
+```{r}
+example_station <- df %>%
+  filter(
+    tow_station == unique(df$tow_station)[1],
+    !is.na(catch)
+  ) %>%
+  arrange(year)
+
+# Data used to build the Dirichlet model
+training_catch <- example_station %>%
+  filter(year <= truncation_year) %>%
+  pull(catch)
+
+# Data used to test the model
+validation_data <- example_station %>%
+  filter(year > truncation_year)
+
+last_year <- max(example_station$year)
+```
+
+```{r}
+n_repetitions <- 1000
+n_simulations <- 10000
+alpha_value <- 1
+
+validation_results <- data.frame(
+  repetition = integer(n_repetitions),
+  year = integer(n_repetitions),
+  historical_catch = numeric(n_repetitions),
+  lower_95 = numeric(n_repetitions),
+  upper_95 = numeric(n_repetitions),
+  inside_interval = logical(n_repetitions)
+)
+
+for (i in 1:n_repetitions) {
+  
+  # Randomly select one validation year
+  selected_year <- sample(validation_data$year, 1)
+  
+  # Get the historical catch for that year
+  historical_value <- validation_data %>%
+    filter(year == selected_year) %>%
+    pull(catch)
+  
+  # Equal alpha for every historical year
+  alpha <- rep(alpha_value, length(training_catch))
+  
+  # Generate Dirichlet proportions
+  proportions <- rdirichlet(
+    n = n_simulations,
+    alpha = alpha
+  )
+  
+  # Convert proportions into simulated catches
+  simulated_catches <- as.vector(
+    proportions %*% training_catch
+  )
+  
+  # Calculate 95% simulation interval
+  lower_95 <- quantile(simulated_catches, 0.025)
+  upper_95 <- quantile(simulated_catches, 0.975)
+  
+  # Check whether historical catch is inside interval
+  inside <- (
+    historical_value >= lower_95 &&
+    historical_value <= upper_95
+  )
+  
+  # Store results
+  validation_results[i, ] <- c(
+    i,
+    selected_year,
+    historical_value,
+    lower_95,
+    upper_95,
+    inside
+  )
+}
+```
+
+```{r}
+validation_summary <- validation_results %>%
+  summarise(
+    inside = sum(inside_interval),
+    outside = sum(!inside_interval),
+    total = n(),
+    percentage_inside = mean(inside_interval) * 100,
+    percentage_outside = mean(!inside_interval) * 100
+  )
+
+validation_summary
+```
+
+# All stations
+```{r warning=FALSE}
+validation_results <- list()
+
+station_list <- unique(df$tow_station)
+
+for (station in station_list) {
+  
+  # Get data for this station
+  station_data <- df %>%
+    filter(
+      tow_station == station,
+      !is.na(catch)
+    ) %>%
+    arrange(year)
+  
+  # Historical data used to build the model
+  training_catch <- station_data %>%
+    filter(year <= truncation_year) %>%
+    pull(catch)
+  
+  # Historical data used for validation
+  validation_data <- station_data %>%
+    filter(year > truncation_year)
+  
+  # Skip station if there is insufficient data
+  if (length(training_catch) < 2 || nrow(validation_data) == 0) {
+    next
+  }
+  
+  # --------------------------------------------------
+  # Generate simulated catch distribution
+  # --------------------------------------------------
+  
+  alpha <- rep(alpha_value, length(training_catch))
+  
+  proportions <- rdirichlet(
+    n = n_simulations,
+    alpha = alpha
+  )
+  
+  simulated_catches <- as.vector(
+    proportions %*% training_catch
+  )
+  
+  # 95% simulation interval
+  lower_95 <- quantile(simulated_catches, 0.025)
+  upper_95 <- quantile(simulated_catches, 0.975)
+  
+  # --------------------------------------------------
+  # Repeatedly select historical validation years
+  # --------------------------------------------------
+  
+  selected_years <- sample(
+    validation_data$year,
+    size = n_repetitions,
+    replace = TRUE
+  )
+  
+  # Get historical catches corresponding to selected years
+  historical_values <- validation_data$catch[
+    match(selected_years, validation_data$year)
+  ]
+  
+  # Determine whether each historical catch
+  # falls inside the simulated 95% interval
+  inside <- (
+    historical_values >= lower_95 &
+    historical_values <= upper_95
+  )
+  
+  # Store results
+  validation_results[[as.character(station)]] <- data.frame(
+    tow_station = station,
+    repetition = 1:n_repetitions,
+    year = selected_years,
+    historical_catch = historical_values,
+    lower_95 = lower_95,
+    upper_95 = upper_95,
+    inside_interval = inside
+  )
+}
+
+# Combine all stations
+validation_results <- bind_rows(validation_results)
+```
+
+
+```{r}
+station_summary <- validation_results %>%
+  group_by(tow_station) %>%
+  summarise(
+    inside = sum(inside_interval),
+    outside = sum(!inside_interval),
+    total = n(),
+    percentage_inside = mean(inside_interval) * 100,
+    percentage_outside = mean(!inside_interval) * 100,
+    .groups = "drop"
+  )
+
+station_summary
+```
+
+
+```{r}
+ggplot(
+  station_summary,
+  aes(x = percentage_inside)
+) +
+  geom_histogram(
+    bins = 20
+  ) +
+  labs(
+    title = "95% Simulation Interval Coverage Across Stations",
+    x = "Historical catches inside 95% interval (%)",
+    y = "Number of stations"
+  ) +
+  theme_minimal()
+```
+
