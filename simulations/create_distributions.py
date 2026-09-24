@@ -1,9 +1,15 @@
 # Functions to create a set of distriutions for stochastic simulations
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
-df = pd.read_excel('data/spring_historical_english.xlsx')
+# Get the folder containing this Python file
+BASE_DIR = Path(__file__).resolve().parent
 
+# Path to the data folder
+DATA_FILE = BASE_DIR / 'data' / 'spring_historical_english.xlsx'
+
+df = pd.read_excel(DATA_FILE)
 # =============
 # Function 1: Call the distribution function to create a set of scenarios, and write it to a file
 # =============
