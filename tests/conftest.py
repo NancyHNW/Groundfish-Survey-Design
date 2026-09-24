@@ -16,6 +16,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: tests that run solvers (may take 10-60s each)"
     )
+    config.addinivalue_line(
+        "markers", "full: tests against the real 581-station survey"
+    )
 
 
 BASELINES_PATH = os.path.join(os.path.dirname(__file__), "golden_baselines.json")
@@ -56,6 +59,44 @@ def save_baselines(data):
     text = json.dumps(data, indent=2, default=_json_safe)
     with open(BASELINES_PATH, "w") as f:
         f.write(text)
+
+
+_CATCH_LOADER_ATTR = "load_catch_fixed_random_assignment"
+_CATCH_LOADER_MODULES = ["data_loader", "classes", "neighbourhood_rules",
+                         "ant_colony_optimisation",
+                         "formulation_tester_functions"]
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _pristine_catch_loader():
+    """Capture the unpatched catch loader once, before any test runs."""
+    from unified.adapters import heuristic_context
+
+    with heuristic_context():
+        import data_loader  # noqa: F401  imported for the side effect
+
+    return {name: getattr(sys.modules[name], _CATCH_LOADER_ATTR)
+            for name in _CATCH_LOADER_MODULES
+            if name in sys.modules
+            and hasattr(sys.modules[name], _CATCH_LOADER_ATTR)}
+
+
+@pytest.fixture(autouse=True)
+def _restore_catch_loader(_pristine_catch_loader):
+    """Undo the catch-loader monkey-patch after every test.
+
+    to_heuristic_problem patches it globally and never restores it, so without
+    this one test asking for catch_source="gfsp" leaks gfsp data into every
+    later test. Restores the pristine loader, not whatever this test started
+    with -- that may already be patched.
+    """
+    try:
+        yield
+    finally:
+        for name, original in _pristine_catch_loader.items():
+            mod = sys.modules.get(name)
+            if mod is not None:
+                setattr(mod, _CATCH_LOADER_ATTR, original)
 
 
 @pytest.fixture(scope="session")

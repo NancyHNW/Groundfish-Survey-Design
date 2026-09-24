@@ -16,7 +16,8 @@ from experiments.common import (base_parser, describe_run, output_path, solve)
 
 def run(ns=20, nv=2, cf=62.5, instance=1, method="tabu_move", time_limit=10,
         catch_source="historical", capacity_buffer=1.0, strategy="backtrack",
-        preemptive_threshold=0.8, seed=None, full=False, catch_table=True):
+        preemptive_threshold=0.8, seed=None, full=False, catch_table=True,
+        home_ports=None):
     """Solve, draw one catch scenario, report and plot the realisation."""
     from unified.stochastic_catch import CatchSimulator
     from unified.stochastic_eval import (evaluate_single_realisation,
@@ -25,7 +26,8 @@ def run(ns=20, nv=2, cf=62.5, instance=1, method="tabu_move", time_limit=10,
 
     det = solve(ns=ns, nv=nv, cf=cf, instance=instance, method=method,
                 time_limit=time_limit, catch_source=catch_source,
-                capacity_buffer=capacity_buffer, full=full)
+                capacity_buffer=capacity_buffer, full=full,
+                home_ports=home_ports)
     trips, inst = det["trips"], det["instance"]
 
     print(f"\nGot {len(trips)} trips, planned {det['planned_time']:.1f}h "
@@ -50,9 +52,11 @@ def run(ns=20, nv=2, cf=62.5, instance=1, method="tabu_move", time_limit=10,
         tag = f"{method}-buf{capacity_buffer:g}-{strategy}"
 
     plot_realisation(trips, inst, result,
-                     save_path=output_path("realisation", tag, inst))
+                     save_path=output_path("realisation", tag, inst,
+                                           home_ports=home_ports))
     plot_time_comparison(trips, result,
-                         save_path=output_path("time-comparison", tag, inst))
+                         save_path=output_path("time-comparison", tag, inst,
+                                               home_ports=home_ports))
     if catch_table:
         print_catch_table(trips, catch, inst)
 
@@ -104,9 +108,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=None,
                         help="Seed for the single catch draw "
                              "(default: a new realisation each run)")
-    parser.add_argument("--full", action="store_true",
-                        help="Use the full 581-station problem "
-                             "(ignores --ns/--nv/--cf)")
+    # --full now comes from base_parser(), so every experiment can reach the
+    # full problem rather than just this one.
     parser.add_argument("--no-catch-table", dest="catch_table",
                         action="store_false",
                         help="Skip the per-station catch table")
@@ -119,4 +122,5 @@ if __name__ == "__main__":
         catch_source=args.catch_source,
         capacity_buffer=args.capacity_buffer, strategy=args.strategy,
         preemptive_threshold=args.threshold, seed=args.seed, full=args.full,
+        home_ports=args.home_ports,
         catch_table=args.catch_table)

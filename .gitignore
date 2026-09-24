@@ -140,3 +140,5 @@ tests/golden_baselines.json
 
 # Working notes
 documentation/
+
+.cache/
