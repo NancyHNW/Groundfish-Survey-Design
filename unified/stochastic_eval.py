@@ -613,6 +613,49 @@ _INK = "#0b0b0b"
 _MUTED = "#898781"
 
 
+def _dodge(x, n_series):
+    """Horizontal offset per series, so intervals at one x sit side by side.
+
+    Spread over a third of the gap between adjacent x values, which keeps each
+    buffer's group visibly a group rather than drifting into its neighbour. A
+    single series is not dodged at all.
+    """
+    if n_series < 2:
+        return [0.0]
+    gaps = [b - a for a, b in zip(x, x[1:])]
+    width = (min(gaps) if gaps else 1.0) * 0.34
+    step = width / (n_series - 1)
+    return [-width / 2 + i * step for i in range(n_series)]
+
+
+def _draw_series(ax, x, y, yerr, colour, label):
+    """One series: a connecting line, and the 95% interval as the mark.
+
+    The interval replaces the point marker rather than decorating it. Where the
+    rows carry no error columns there is nothing to mark the point with, so a
+    small dot comes back -- otherwise the series would be a bare line.
+    """
+    ax.plot(x, y, linestyle="-", color=colour, linewidth=1.6, zorder=3,
+            marker="" if yerr else "o", markersize=4, label=label)
+    if yerr:
+        # Caps sized to stay legible when the interval is shorter than the line
+        # is thick, which is the usual case at 1000 scenarios.
+        ax.errorbar(x, y, yerr=yerr, fmt="none", ecolor=colour, elinewidth=1.6,
+                    capsize=5, capthick=1.6, zorder=4)
+
+
+def _errors(series, buffers, key):
+    """Per-point error bar heights, or None when the rows do not carry them.
+
+    Rows predating the Monte Carlo error columns still plot, just without bars,
+    rather than raising halfway through a long sweep.
+    """
+    vals = [series[b].get(key) for b in buffers]
+    if any(v is None for v in vals):
+        return None
+    return [float(v) for v in vals]
+
+
 def plot_sweep_grid(rows, save_path=None, title_suffix=None):
     """Buffer against realised time, one line per overflow strategy.
 
@@ -638,27 +681,30 @@ def plot_sweep_grid(rows, save_path=None, title_suffix=None):
     ax1.plot(x, planned, "s--", color=_MUTED, linewidth=1.5, markersize=6,
              label="Planned (no overflow)", zorder=2)
 
-    # Distinct marker per series. backtrack and forward often coincide exactly
-    # -- they make the same returns, differing only in what happens after -- so
-    # without this one line hides completely under the other.
-    markers = ["o", "s", "^", "D"]
+    # The interval is the mark -- no separate dot. A point estimate drawn as a
+    # dot invites reading a 2 h gap as real when the interval is 3 h wide.
+    #
+    # Series are dodged apart within each buffer because backtrack and forward
+    # often coincide exactly -- they make the same returns, differing only in
+    # what happens after -- and two intervals at identical (x, y) would hide
+    # one another completely. Distinct markers used to carry that job.
+    offsets = _dodge(x, len(cases))
     ends = []
 
     for i, case in enumerate(cases):
         colour = _STRATEGY_COLOURS[i % len(_STRATEGY_COLOURS)]
-        marker = markers[i % len(markers)]
         series = {r["buffer"]: r for r in rows if r["case"] == case}
+        xi = [xv + offsets[i] for xv in x]
 
         means = [series[b]["mean"] for b in buffers]
-        ax1.plot(x, means, marker=marker, linestyle="-", color=colour,
-                 linewidth=2, markersize=8, label=case, zorder=3,
-                 markerfacecolor="none" if i % 2 else colour)
+        _draw_series(ax1, xi, means, _errors(series, buffers, "mc_ci95"),
+                     colour, case)
         ends.append((means[-1], case, colour))
 
         rpt = [series[b]["returns_per_trip"] for b in buffers]
-        ax2.plot(x, rpt, marker=marker, linestyle="-", color=colour,
-                 linewidth=2, markersize=8, label=case, zorder=3,
-                 markerfacecolor="none" if i % 2 else colour)
+        _draw_series(ax2, xi, rpt,
+                     _errors(series, buffers, "returns_per_trip_ci95"),
+                     colour, case)
 
     # Direct labels as well as the legend, so identity never rests on colour
     # alone. Nudged apart where the series end too close to read.
@@ -669,7 +715,8 @@ def plot_sweep_grid(rows, save_path=None, title_suffix=None):
         if placed and y - placed[-1] < gap:
             y = placed[-1] + gap
         placed.append(y)
-        ax1.annotate(case, (x[-1], y), textcoords="offset points",
+        ax1.annotate(case, (x[-1] + max(offsets), y),
+                     textcoords="offset points",
                      xytext=(10, 0), fontsize=8, color=_INK,
                      va="center", annotation_clip=False)
 
@@ -694,11 +741,24 @@ def plot_sweep_grid(rows, save_path=None, title_suffix=None):
     # Room for the direct labels hanging off the right of the left panel
     ax1.margins(x=0.12)
 
+    # What the bars cover, and what they do not. Points in one column share a
+    # solve, so the strategy contrast is properly paired and the bars are the
+    # whole story. Across columns each point has its own solve, and restart
+    # noise there runs to tens of hours -- far wider than anything drawn.
+    has_bars = any("mc_ci95" in r for r in rows)
+    if has_bars:
+        fig.text(0.5, 0.015,
+                 "Error bars: 95% Monte Carlo CI on the mean (scenario "
+                 "sampling only). Solver restart noise, which dominates "
+                 "comparisons between buffers, is not shown.",
+                 ha="center", fontsize=7.5, color=_MUTED)
+
+    bottom = 0.10 if has_bars else 0
     if title_suffix:
         fig.suptitle(title_suffix, fontsize=10)
-        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        plt.tight_layout(rect=[0, bottom, 1, 0.94])
     else:
-        plt.tight_layout()
+        plt.tight_layout(rect=[0, bottom, 1, 1])
 
     if save_path:
         plt.savefig(save_path, dpi=200)

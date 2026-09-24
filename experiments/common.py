@@ -7,6 +7,7 @@ so the same flag cannot end up meaning different things in different scripts.
 """
 
 import csv
+import math
 import os
 
 # CLI method names -> the names run_heuristic_on_gfsp uses.
@@ -127,6 +128,42 @@ def solve(ns=100, nv=2, cf=125, instance=1, method="tabu_move",
     return result
 
 
+def _mc_se(std, n_simulations):
+    """Standard error of a Monte Carlo mean.
+
+    The evaluator reports a population sd over n scenarios (np.std, ddof=0), so
+    the sample-sd standard error is std/sqrt(n-1) rather than std/sqrt(n).
+
+    This is scenario-sampling error only. It says nothing about solver restart
+    noise, which is the larger term whenever two rows come from different
+    solves -- see the note on plot_sweep_grid.
+    """
+    n = n_simulations or 0
+    return std / math.sqrt(n - 1) if n > 1 else 0.0
+
+
+def _returns_error(result, e_returns, n_trips):
+    """Monte Carlo error on E[unscheduled returns], absolute and per trip.
+
+    Needs the per-scenario counts, which only a real evaluator result carries.
+    Returns an empty dict when they are absent so a stubbed result still works.
+    """
+    per_scenario = result.get("all_results")
+    if not per_scenario:
+        return {}
+    counts = [r["n_unscheduled_returns"] for r in per_scenario]
+    n = len(counts)
+    if n < 2:
+        return {}
+    var = sum((c - e_returns) ** 2 for c in counts) / n
+    se = _mc_se(math.sqrt(var), n)
+    return {
+        "returns_se": se,
+        "returns_ci95": 1.96 * se,
+        "returns_per_trip_ci95": 1.96 * se / n_trips if n_trips else 0.0,
+    }
+
+
 def summarise(result, planned, n_trips, feasible=None, **extra):
     """Turn an evaluator result into one table row.
 
@@ -143,20 +180,24 @@ def summarise(result, planned, n_trips, feasible=None, **extra):
     **extra : the column naming this row, e.g. buffer=0.8
     """
     td = result["total_time_distribution"]
+    e_returns = result["expected_unscheduled_returns"]
     row = dict(extra)
     row.update({
         "planned": planned,
         "trips": n_trips,
         "p_exceed": result["p_capacity_exceedance"],
-        "e_returns": result["expected_unscheduled_returns"],
+        "e_returns": e_returns,
         # Per trip, not absolute. A tighter buffer plans more trips, so the
         # raw count can drop just by spreading the same risk more thinly.
-        "returns_per_trip": (result["expected_unscheduled_returns"] / n_trips
-                             if n_trips else 0.0),
+        "returns_per_trip": (e_returns / n_trips if n_trips else 0.0),
         "mean": td["mean"],
+        "sd": td["std"],
+        "mc_se": _mc_se(td["std"], result.get("n_simulations")),
+        "mc_ci95": 1.96 * _mc_se(td["std"], result.get("n_simulations")),
         "p5": td["p5"],
         "p95": td["p95"],
     })
+    row.update(_returns_error(result, e_returns, n_trips))
     if feasible is not None:
         row["feasible"] = feasible
     return row
@@ -242,6 +283,9 @@ CORE_COLUMNS = [
     ("e_returns", "E[ret]", 8, ".2f"),
     ("returns_per_trip", "ret/trip", 10, ".3f"),
     ("mean", "mean time", 11, ".1f"),
+    # Alongside the mean, always. A mean with no error is what let three
+    # contradictory buffer tables all look equally believable in August.
+    ("mc_ci95", "+/-95%", 9, ".1f"),
     ("p95", "p95 time", 10, ".1f"),
 ]
 
