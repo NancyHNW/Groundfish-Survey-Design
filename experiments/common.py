@@ -272,6 +272,213 @@ def add_baseline_delta(rows, key, baseline_value, column="vs_baseline"):
 
 
 # ---------------------------------------------------------------------------
+# Paired comparison
+# ---------------------------------------------------------------------------
+
+# Evaluator kwargs; everything else in a setting goes to solve(). Settings
+# differing only in these share one solve -- the strategy is picked at sea
+# against a fixed plan, so re-solving per strategy would break the pairing.
+EVAL_KEYS = ("strategy", "preemptive_threshold", "max_repairs")
+
+
+def parse_instances(text):
+    """Parse an instance spec: "1-30", "1,4,7", "1-5,9" all work."""
+    out = []
+    for part in str(text).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part[1:]:
+            lo, hi = part.split("-", 1)
+            out.extend(range(int(lo), int(hi) + 1))
+        else:
+            out.append(int(part))
+    return out
+
+
+# Two-tailed 95% critical values. At n=8 blocks, t is 2.365 against the normal
+# 1.96 -- using 1.96 there would overstate significance by a fifth.
+_T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447,
+        7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179,
+        13: 2.160, 14: 2.145, 15: 2.131, 16: 2.120, 17: 2.110, 18: 2.101,
+        19: 2.093, 20: 2.086, 21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064,
+        25: 2.060, 26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
+        40: 2.021, 60: 2.000, 120: 1.980}
+
+
+def _t_critical(df):
+    """Two-tailed 95% t value. Falls back to the next df down, so it errs wide."""
+    if df < 1:
+        return 0.0
+    if df in _T95:
+        return _T95[df]
+    below = [d for d in _T95 if d <= df]
+    return _T95[max(below)] if below else 1.96
+
+
+def _split_setting(kwargs):
+    """Split one setting's kwargs into (solve kwargs, evaluate kwargs)."""
+    eval_kw = {k: v for k, v in kwargs.items() if k in EVAL_KEYS}
+    solve_kw = {k: v for k, v in kwargs.items() if k not in EVAL_KEYS}
+    return solve_kw, eval_kw
+
+
+def _group_by_solve(settings):
+    """Group settings sharing solve kwargs -> (solve_kw, [(label, eval_kw)]).
+
+    Keyed on a repr because home_ports arrives as a list, which is unhashable.
+    """
+    groups = {}
+    for label, kwargs in settings:
+        solve_kw, eval_kw = _split_setting(kwargs)
+        key = repr(sorted(solve_kw.items()))
+        groups.setdefault(key, (solve_kw, []))[1].append((label, eval_kw))
+    return list(groups.values())
+
+
+def paired_compare(settings, baseline, instances=(1,), solver_seeds=(42,),
+                   evaluator=None, scenario_seed=123, n_scenarios=500,
+                   progress=True, **fixed):
+    """Measure every setting on every block, differencing inside the block.
+
+    A block is one (instance, solver seed) pair. Differencing within it cancels
+    instance difficulty, and the shared restarts cancel much of the solver noise.
+
+    Parameters
+    ----------
+    settings : list of (label, kwargs), kwargs split on EVAL_KEYS
+    baseline : str, the label every difference is taken against
+    instances, solver_seeds : iterable, their cross product is the blocks
+    progress : bool, per-block progress. Not called `verbose` -- solve() has one
+        of those already, and the two shadowing silences the wrong thing
+    **fixed : passed to every solve(). No `instance` or `seed`
+
+    Returns (summary_rows, block_rows).
+    """
+    labels = [label for label, _ in settings]
+    if baseline not in labels:
+        raise ValueError(f"baseline {baseline!r} is not one of {labels}")
+    for clash in ("instance", "seed"):
+        if clash in fixed:
+            raise ValueError(f"pass {clash} through its own argument, "
+                             f"not through **fixed")
+
+    if evaluator is None:
+        evaluator = make_evaluator(scenario_seed, n_scenarios)
+
+    groups = _group_by_solve(settings)
+    blocks = [(i, s) for i in instances for s in solver_seeds]
+    if progress:
+        print(f"{len(blocks)} blocks x {len(groups)} solves = "
+              f"{len(blocks) * len(groups)} solves for "
+              f"{len(blocks) * len(settings)} measurements")
+
+    block_rows = []
+    for b, (inst_no, seed) in enumerate(blocks, 1):
+        for solve_kw, members in groups:
+            det = solve(instance=inst_no, seed=seed, verbose=False,
+                        **solve_kw, **fixed)
+            for label, eval_kw in members:
+                result = evaluator.evaluate(det["trips"], det["instance"],
+                                            **eval_kw)
+                block_rows.append(summarise(
+                    result, det["planned_time"], len(det["trips"]),
+                    feasible=det["feasible"],
+                    instance=inst_no, seed=seed, setting=label))
+        if progress:
+            print(f"  block {b}/{len(blocks)}: instance {inst_no}, seed {seed}",
+                  flush=True)
+
+    return _paired_summary(block_rows, labels, baseline), block_rows
+
+
+def _paired_summary(block_rows, labels, baseline):
+    """Within-block differences against the baseline, one row per setting."""
+    by_block = {}
+    for r in block_rows:
+        by_block.setdefault((r["instance"], r["seed"]), {})[r["setting"]] = r
+
+    rows = []
+    for label in labels:
+        paired = [(b[label], b[baseline]) for b in by_block.values()
+                  if label in b and baseline in b]
+        diffs = [mine["mean"] - base["mean"] for mine, base in paired]
+        n = len(diffs)
+        mean_level = sum(m["mean"] for m, _ in paired) / n if n else 0.0
+        diff = sum(diffs) / n if n else 0.0
+
+        # n-1: a sample of instances, not the population of them
+        if n > 1:
+            sd = math.sqrt(sum((d - diff) ** 2 for d in diffs) / (n - 1))
+            se = sd / math.sqrt(n)
+            half = _t_critical(n - 1) * se
+        else:
+            sd = se = half = 0.0
+
+        lo, hi = diff - half, diff + half
+        rows.append({
+            "setting": label,
+            "n": n,
+            "mean": mean_level,
+            "diff": diff,
+            "sd": sd,
+            "se": se,
+            "ci_lo": lo,
+            "ci_hi": hi,
+            # Plain bool: a numpy one leaks into the CSV and fails `is False`
+            "significant": bool(n > 1 and (lo > 0 or hi < 0)),
+            "infeasible_blocks": sum(1 for m, _ in paired
+                                     if m.get("feasible") is False),
+        })
+    return rows
+
+
+PAIRED_COLUMNS = [
+    ("setting", "setting", 20, ""),
+    ("n", "n", 5, "d"),
+    ("mean", "mean", 10, ".1f"),
+    ("diff", "vs base", 10, "+.2f"),
+    ("sd", "sd", 8, ".2f"),
+    ("ci_lo", "ci lo", 9, "+.2f"),
+    ("ci_hi", "ci hi", 9, "+.2f"),
+    ("significant", "sig", 7, ""),
+]
+
+
+def print_paired(rows, baseline, title=None):
+    """Print the paired table, then which way each result went.
+
+    Sign matters as much as significance: a setting can separate from the
+    baseline by being reliably worse, which a "best setting" line reads as a win.
+    """
+    print_table(rows, PAIRED_COLUMNS, title=title)
+
+    infeasible = sum(r["infeasible_blocks"] for r in rows)
+    if infeasible:
+        # An infeasible solve still returns a solution -- the last restart
+        # tried, not a best-of. Averaging those in compares plans to failures.
+        print(f"\n!! {infeasible} block-measurements came from solves with no "
+              f"feasible solution. Those are last-restart plans, not best-of.")
+
+    better = [r for r in rows if r["significant"] and r["diff"] < 0]
+    worse = [r for r in rows if r["significant"] and r["diff"] > 0]
+    flat = [r for r in rows
+            if not r["significant"] and r["setting"] != baseline]
+
+    def show(heading, group):
+        if not group:
+            return
+        print(f"\n{heading}")
+        for r in sorted(group, key=lambda r: r["diff"]):
+            print(f"    {r['setting']:<20s} {r['diff']:+8.2f} h   "
+                  f"[{r['ci_lo']:+.2f}, {r['ci_hi']:+.2f}]")
+
+    show(f"Beats {baseline}:", better)
+    show(f"Reliably worse than {baseline}:", worse)
+    show(f"Cannot separate from {baseline}:", flat)
+
+
+# ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
@@ -345,6 +552,9 @@ def base_parser():
                          help="Capacity factor (default: 125)")
     problem.add_argument("--instance", type=int, default=1,
                          help="Instance number 1-30 (default: 1)")
+    problem.add_argument("--instances", default=None,
+                         help="Instances to pair over, e.g. 1-30 or 1,4,7. "
+                              "Default: just --instance")
     problem.add_argument("--full", action="store_true",
                          help="Run on the real 581-station survey. --ns/--nv/"
                               "--cf/--instance are ignored")
@@ -358,6 +568,9 @@ def base_parser():
                         help="Solver method (default: tabu_move)")
     solver.add_argument("--time-limit", type=float, default=10,
                         help="Solver time limit in seconds (default: 10)")
+    solver.add_argument("--solver-seeds", nargs="+", type=int, default=[42],
+                        help="Solver seeds to pair over. On --full this is the "
+                             "only axis pairing has (default: 42)")
     solver.add_argument("--catch-source", default="historical",
                         choices=["gfsp", "heuristic", "historical"],
                         help="Catch data the solver plans against. Scenarios "
