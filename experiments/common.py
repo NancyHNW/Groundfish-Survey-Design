@@ -128,35 +128,26 @@ def solve(ns=100, nv=2, cf=125, instance=1, method="tabu_move",
     return result
 
 
-def _mc_se(std, n_simulations):
-    """Standard error of a Monte Carlo mean.
+def _mc_se(std, n):
+    """Standard error of a mean over n scenarios.
 
-    The evaluator reports a population sd over n scenarios (np.std, ddof=0), so
-    the sample-sd standard error is std/sqrt(n-1) rather than std/sqrt(n).
-
-    This is scenario-sampling error only. It says nothing about solver restart
-    noise, which is the larger term whenever two rows come from different
-    solves -- see the note on plot_sweep_grid.
+    std is a population sd (np.std, ddof=0), so the error is std/sqrt(n-1).
+    Scenario sampling only -- says nothing about solver restart noise.
     """
-    n = n_simulations or 0
+    n = n or 0
     return std / math.sqrt(n - 1) if n > 1 else 0.0
 
 
 def _returns_error(result, e_returns, n_trips):
-    """Monte Carlo error on E[unscheduled returns], absolute and per trip.
+    """Error on E[returns], absolute and per trip.
 
-    Needs the per-scenario counts, which only a real evaluator result carries.
-    Returns an empty dict when they are absent so a stubbed result still works.
+    Empty when the per-scenario counts are absent, so a stubbed result works.
     """
-    per_scenario = result.get("all_results")
-    if not per_scenario:
+    counts = [r["n_unscheduled_returns"] for r in result.get("all_results") or []]
+    if len(counts) < 2:
         return {}
-    counts = [r["n_unscheduled_returns"] for r in per_scenario]
-    n = len(counts)
-    if n < 2:
-        return {}
-    var = sum((c - e_returns) ** 2 for c in counts) / n
-    se = _mc_se(math.sqrt(var), n)
+    var = sum((c - e_returns) ** 2 for c in counts) / len(counts)
+    se = _mc_se(math.sqrt(var), len(counts))
     return {
         "returns_se": se,
         "returns_ci95": 1.96 * se,
@@ -167,20 +158,13 @@ def _returns_error(result, e_returns, n_trips):
 def summarise(result, planned, n_trips, feasible=None, **extra):
     """Turn an evaluator result into one table row.
 
-    Every experiment reports the same core metrics. The only difference is the
-    column naming the row (buffer, strategy, method), passed in through extra
-    so it lands first in the dict.
-
-    Parameters
-    ----------
-    result : dict, output of StochasticEvaluator.evaluate
-    planned : float, deterministic planned time (the floor of the distribution)
-    n_trips : int, number of planned trips
-    feasible : bool or None, feasibility against the true capacity
-    **extra : the column naming this row, e.g. buffer=0.8
+    Every experiment reports the same metrics. **extra is the column naming the
+    row (buffer, strategy, method), and lands first in the dict.
     """
     td = result["total_time_distribution"]
     e_returns = result["expected_unscheduled_returns"]
+    se = _mc_se(td["std"], result.get("n_simulations"))
+
     row = dict(extra)
     row.update({
         "planned": planned,
@@ -189,11 +173,11 @@ def summarise(result, planned, n_trips, feasible=None, **extra):
         "e_returns": e_returns,
         # Per trip, not absolute. A tighter buffer plans more trips, so the
         # raw count can drop just by spreading the same risk more thinly.
-        "returns_per_trip": (e_returns / n_trips if n_trips else 0.0),
+        "returns_per_trip": e_returns / n_trips if n_trips else 0.0,
         "mean": td["mean"],
         "sd": td["std"],
-        "mc_se": _mc_se(td["std"], result.get("n_simulations")),
-        "mc_ci95": 1.96 * _mc_se(td["std"], result.get("n_simulations")),
+        "mc_se": se,
+        "mc_ci95": 1.96 * se,
         "p5": td["p5"],
         "p95": td["p95"],
     })
