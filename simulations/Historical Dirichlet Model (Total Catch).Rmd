@@ -601,6 +601,7 @@ ggplot(
 
 ## VERIFYING
 Use this model to predict catch in one year.
+Use a set of dirichlet to simulate like 100 scenarios --> get 
 ```{r}
 
 

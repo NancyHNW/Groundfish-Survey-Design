@@ -35,7 +35,6 @@ Reading in Data
 file_path <- "./data/spring_historical_english.xlsx"
 df <- read_excel(file_path)
 head(df)
-names(df)
 ```
 
 Extract only columns we want
@@ -75,7 +74,7 @@ ggplot(annual_catch, aes(x = year, y = total_catch)) +
   ) +
   theme_minimal()
 ```
-Truncate starting from year 2002
+Truncate starting from year 2002 (Dana did 2012)
 ```{r}
 truncation_year <- 2002
 
@@ -220,7 +219,6 @@ historical_value <- example_station %>%
 random_year
 historical_value
 
-
 lower_95 <- quantile(simulated_catches, 0.025)
 upper_95 <- quantile(simulated_catches, 0.975)
 ```
@@ -240,7 +238,7 @@ ggplot(simulation_df, aes(x = catch)) +
     alpha = 0.7
   ) +
   
-  # 95% confidence/credible interval
+  # 95% confidence interval
   geom_vline(
     xintercept = lower_95,
     linetype = "dashed",
@@ -472,6 +470,25 @@ station_summary <- validation_results %>%
 
 station_summary
 ```
+```{r}
+station_summary <- validation_results %>%
+  group_by(tow_station) %>%
+  summarise(
+    inside = sum(inside_interval),
+    outside = sum(!inside_interval),
+    total = n(),
+    percentage_inside = mean(inside_interval) * 100,
+    percentage_outside = mean(!inside_interval) * 100,
+    .groups = "drop"
+  )
+
+station_summary
+
+# Summary statistics across stations
+summary(station_summary$percentage_inside)
+summary(station_summary$percentage_outside)
+```
+
 
 
 ```{r}
