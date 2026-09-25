@@ -8,11 +8,12 @@ win once the catch is uncertain.
     python -m experiments.monte_carlo --ns 100 --nv 2 --cf 125 --time-limit 60
 """
 
-from experiments.common import (CORE_COLUMNS, add_baseline_delta, base_parser,
-                                describe_run, make_evaluator, output_path,
-                                print_table, save_csv, sweep_solve)
+from experiments.common import (CORE_COLUMNS, REPAIR_COLUMNS,
+                                add_baseline_delta, base_parser, describe_run,
+                                make_evaluator, output_path, print_table,
+                                save_csv, strategy_tag, sweep_solve)
 
-COLUMNS = ([("method", "method", 14, "")] + CORE_COLUMNS
+COLUMNS = ([("method", "method", 14, "")] + CORE_COLUMNS + REPAIR_COLUMNS
            + [("vs_first", "vs first", 10, "+.1f")])
 
 DEFAULT_METHODS = ("grasp_only", "grasp_swap", "tabu_move")
@@ -30,7 +31,8 @@ def _figure_context(method, strategy, inst, capacity_buffer):
 
 def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
         time_limit=10, catch_source="historical", strategy="backtrack",
-        preemptive_threshold=0.8, n_scenarios=500, scenario_seed=123,
+        preemptive_threshold=0.8, repair_scope="trip", repair_planner="nn",
+        repair_solver_time=0.0, n_scenarios=500, scenario_seed=123,
         capacity_buffer=1.0, histograms=True, full=False,
         home_ports=None):
     """Solve with each method, evaluate against shared scenarios, return rows."""
@@ -43,6 +45,9 @@ def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
     for method, det, result, row in sweep_solve(
             "method", methods, evaluator,
             strategy=strategy, preemptive_threshold=preemptive_threshold,
+            repair_scope=repair_scope,
+            repair_planner=repair_planner,
+            repair_solver_time=repair_solver_time,
             ns=ns, nv=nv, cf=cf, instance=instance, time_limit=time_limit,
             catch_source=catch_source, capacity_buffer=capacity_buffer,
             full=full, home_ports=home_ports):
@@ -69,7 +74,7 @@ def run(methods=DEFAULT_METHODS, ns=100, nv=2, cf=125, instance=1,
     best = min(rows, key=lambda r: r["mean"])
     print(f"\nLowest mean realised time: {best['method']}")
 
-    tag = f"methods-{strategy}"
+    tag = f"methods-{strategy_tag(strategy, repair_scope, repair_planner)}"
     save_csv(rows, output_path("method-comparison", tag, inst, ".csv",
                                home_ports=home_ports))
 
@@ -97,7 +102,10 @@ if __name__ == "__main__":
     run(methods=tuple(args.methods), ns=args.ns, nv=args.nv, cf=args.cf,
         instance=args.instance, time_limit=args.time_limit,
         catch_source=args.catch_source, strategy=args.strategy,
-        preemptive_threshold=args.threshold, n_scenarios=args.n_scenarios,
+        preemptive_threshold=args.threshold,
+        repair_scope=args.repair_scope, repair_planner=args.repair_planner,
+        repair_solver_time=args.repair_solver_time,
+        n_scenarios=args.n_scenarios,
         scenario_seed=args.scenario_seed,
         capacity_buffer=args.capacity_buffer, histograms=args.histograms,
         full=args.full, home_ports=args.home_ports)

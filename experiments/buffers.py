@@ -9,17 +9,19 @@ time rose.
         --method tabu_move --time-limit 60 --buffers 0.7 0.8 0.9 1.0
 """
 
-from experiments.common import (CORE_COLUMNS, add_baseline_delta, base_parser,
-                                describe_run, make_evaluator, output_path,
-                                print_table, save_csv, sweep_solve)
+from experiments.common import (CORE_COLUMNS, REPAIR_COLUMNS,
+                                add_baseline_delta, base_parser, describe_run,
+                                make_evaluator, output_path, print_table,
+                                save_csv, strategy_tag, sweep_solve)
 
-COLUMNS = ([("buffer", "buffer", 9, ".0%")] + CORE_COLUMNS
+COLUMNS = ([("buffer", "buffer", 9, ".0%")] + CORE_COLUMNS + REPAIR_COLUMNS
            + [("vs_full", "vs 100%", 9, "+.1f")])
 
 
 def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
         catch_source="historical", strategy="backtrack",
-        preemptive_threshold=0.8, n_scenarios=500, scenario_seed=123,
+        preemptive_threshold=0.8, repair_scope="trip", repair_planner="nn",
+        repair_solver_time=0.0, n_scenarios=500, scenario_seed=123,
         buffers=(0.7, 0.8, 0.9, 1.0), full=False, home_ports=None):
     """Solve at each buffer, evaluate against shared scenarios, return rows."""
     evaluator = make_evaluator(scenario_seed, n_scenarios)
@@ -29,6 +31,9 @@ def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
     for _, det, result, row in sweep_solve(
             "capacity_buffer", buffers, evaluator, key="buffer", fmt=".0%",
             strategy=strategy, preemptive_threshold=preemptive_threshold,
+            repair_scope=repair_scope,
+            repair_planner=repair_planner,
+            repair_solver_time=repair_solver_time,
             ns=ns, nv=nv, cf=cf, instance=instance, method=method,
             time_limit=time_limit, catch_source=catch_source, full=full,
             home_ports=home_ports):
@@ -49,7 +54,7 @@ def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
     if best["buffer"] == max(buffers):
         print("No buffer beat planning to full capacity on this instance.")
 
-    tag = f"{method}-{strategy}"
+    tag = f"{method}-{strategy_tag(strategy, repair_scope, repair_planner)}"
     save_csv(rows, output_path("buffer-comparison", tag, inst, ".csv",
                                home_ports=home_ports))
 
@@ -78,6 +83,9 @@ if __name__ == "__main__":
     run(ns=args.ns, nv=args.nv, cf=args.cf, instance=args.instance,
         method=args.method, time_limit=args.time_limit,
         catch_source=args.catch_source, strategy=args.strategy,
-        preemptive_threshold=args.threshold, n_scenarios=args.n_scenarios,
+        preemptive_threshold=args.threshold,
+        repair_scope=args.repair_scope, repair_planner=args.repair_planner,
+        repair_solver_time=args.repair_solver_time,
+        n_scenarios=args.n_scenarios,
         scenario_seed=args.scenario_seed, buffers=tuple(args.buffers),
         full=args.full, home_ports=args.home_ports)

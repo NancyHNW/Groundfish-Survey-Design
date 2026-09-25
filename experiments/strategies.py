@@ -7,11 +7,13 @@ are purely the cost of reacting.
     python -m experiments.strategies --ns 100 --nv 2 --cf 125 --time-limit 60
 """
 
-from experiments.common import (CORE_COLUMNS, add_baseline_delta, base_parser,
+from experiments.common import (CORE_COLUMNS, REPAIR_COLUMNS,
+                                add_baseline_delta, base_parser,
                                 describe_run, make_evaluator, output_path,
                                 print_table, save_csv, solve, sweep_eval)
 
-COLUMNS = ([("case", "case", 18, "")] + CORE_COLUMNS
+# Width 20 fits the longest label, backtrack_last_free
+COLUMNS = ([("case", "case", 20, "")] + CORE_COLUMNS + REPAIR_COLUMNS
            + [("vs_backtrack", "vs backtr", 11, "+.1f")])
 
 THRESHOLD_COLUMNS = ([("case", "alpha", 10, "")] + CORE_COLUMNS)
@@ -19,9 +21,16 @@ THRESHOLD_COLUMNS = ([("case", "alpha", 10, "")] + CORE_COLUMNS)
 # (label, evaluate kwargs), one row each in the main table
 CASES = [
     ("backtrack", {"strategy": "backtrack"}),
+    ("backtrack_last_free", {"strategy": "backtrack_last_free"}),
     ("forward", {"strategy": "forward"}),
     ("preemptive_0.8", {"strategy": "preemptive", "preemptive_threshold": 0.8}),
     ("preemptive_0.7", {"strategy": "preemptive", "preemptive_threshold": 0.7}),
+    ("repair_trip", {"strategy": "repair", "repair_scope": "trip"}),
+    ("repair_boat", {"strategy": "repair", "repair_scope": "boat"}),
+    ("repair_trip_2opt", {"strategy": "repair", "repair_scope": "trip",
+                          "repair_planner": "2opt"}),
+    ("repair_boat_2opt", {"strategy": "repair", "repair_scope": "boat",
+                          "repair_planner": "2opt"}),
 ]
 
 THRESHOLDS = (0.5, 0.6, 0.7, 0.8, 0.9)
@@ -45,7 +54,8 @@ def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
           f"(feasible={det['feasible']})\n")
 
     rows = [row for _, _, row
-            in sweep_eval(trips, inst, CASES, evaluator, planned)]
+            in sweep_eval(trips, inst, CASES, evaluator, planned,
+                          planned_catch=det.get("planned_catch"))]
 
     # Every row shares one route, so backtrack is the natural reference
     add_baseline_delta(rows, "case", "backtrack", "vs_backtrack")
