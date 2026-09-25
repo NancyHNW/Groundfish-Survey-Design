@@ -9,13 +9,14 @@ python -m experiments.buffers      --ns 100 --nv 2 --cf 125 --time-limit 60
 python -m experiments.monte_carlo  --ns 100 --nv 2 --cf 125 --time-limit 60
 python -m experiments.strategies   --ns 100 --nv 2 --cf 125 --time-limit 60
 python -m experiments.realisation  --ns 20  --nv 2 --cf 62.5 --seed 7
+python -m experiments.paired       --compare strategy --instances 1-30
 ```
 
 Every module supports `--help`.
 
 ---
 
-## The four experiments
+## The experiments
 
 | Module | Question | Sweeps | Re-solves? |
 |---|---|---|---|
@@ -23,6 +24,13 @@ Every module supports `--help`.
 | `monte_carlo` | Which solver gives the most robust routes? | `method` | yes |
 | `strategies` | What should a boat do when the hold fills? | overflow response | **no** |
 | `realisation` | What does one season actually look like? | nothing — single draw | yes |
+| `paired` | Is a difference real, or is it solver noise? | any of the above | as needed |
+| `full_sweep` | Buffer crossed with overflow response, on the full problem | both | one per buffer |
+
+`paired` is the one to reach for when a single solve cannot settle the
+question. Restart noise on the full problem spans tens of hours, wider than
+most of the effects being looked for, so it measures every setting on the same
+(instance, seed) block and differences within the block.
 
 `strategies` solves **once** and re-scores that one solution under each
 response. That is deliberate: the overflow response is chosen at sea, after the
@@ -41,8 +49,28 @@ deterministic time need not win once catch is uncertain. Extra flags:
 `--methods grasp_only grasp_swap tabu_move`, `--no-histograms`.
 
 ### `strategies`
-Main table over `backtrack` / `forward` / `preemptive_0.8` / `preemptive_0.7`,
-then a threshold sweep over 0.5–0.9. Extra flag: `--no-threshold-sweep`.
+Main table over nine rows — `backtrack`, `backtrack_last_free`, `forward`,
+`preemptive_0.8`, `preemptive_0.7`, and `repair` crossed with its two scopes
+and two re-planners — then a threshold sweep over 0.5–0.9. Extra flag:
+`--no-threshold-sweep`.
+
+`backtrack_last_free` exists to keep `repair` honest. Part of repair's gain is
+that an overflow on a trip's last station costs nothing — the boat was heading
+to port anyway — and plain `backtrack` overcharges that case. Measured against
+`backtrack_last_free` instead, what is left is the re-routing alone.
+
+Repair re-plans against **true** capacity, not the buffered planning capacity
+the routes were built with. That is what a skipper would do at sea, but it
+means repair partially undoes the buffer wherever the two are crossed.
+
+### `paired`
+`--compare strategy | buffer | method`, over `--instances 1-30` and
+`--solver-seeds`. Reports the mean difference against a baseline with a 95%
+interval, and groups the settings into beats / reliably worse / cannot
+separate — a setting can separate from the baseline by being worse.
+
+Settings that differ only in scoring share one solve, so nine strategies over
+30 instances costs 30 solves, not 270.
 
 ### `realisation`
 Draws a single catch scenario and plots the planned route beside the route
@@ -54,17 +82,27 @@ overflow behaviour legible. Extra flags: `--seed`, `--full` (581 stations),
 
 ## Shared flags
 
-Defined once in `common.base_parser()` and inherited by all four, so the same
-flag always means the same thing:
+Defined once in `common.base_parser()` and inherited by every module, so the
+same flag always means the same thing:
 
 | Group | Flags |
 |---|---|
 | problem | `--ns --nv --cf --instance` |
 | solver | `--method --time-limit --catch-source --capacity-buffer` |
 | stochastic | `--n-scenarios --scenario-seed --strategy --threshold` |
+| repair | `--repair-scope --repair-planner --repair-solver-time` |
 
-`--strategy` reads its choices from `unified.stochastic_eval.STRATEGIES`, so
-adding a strategy needs no CLI edit.
+`--strategy`, `--repair-scope` and `--repair-planner` read their choices from
+the registries in `unified.stochastic_eval`, so adding one needs no CLI edit.
+
+The repair flags only do anything with `--strategy repair`, and only in the
+modules that sweep a single strategy — `buffers`, `monte_carlo`, `realisation`.
+`strategies`, `full_sweep` and `paired` carry their own fixed lists of repair
+settings and ignore them.
+
+`--repair-scope trip` re-plans the overflowed trip; `boat` re-plans everything
+that boat has left. `--repair-planner` is `nn`, `2opt` or `solver`, worst to
+best; `solver` is thousands of times slower and is for one-off runs only.
 
 **`--catch-source` matters more than it looks.** The solver plans against this
 data, but scenarios are *always* drawn from the historical distributions.
@@ -101,13 +139,16 @@ one-line summary — without the shared code needing to know about it.
 
 | Column | Meaning |
 |---|---|
-| `planned` | Deterministic total time, summed across vessels. A hard floor: realised time can only be ≥ this, since strategies only ever add detours. |
+| `planned` | Deterministic total time, summed across vessels. A floor for the detour strategies, which only ever add to an unchanged route. `repair` replaces routes, so it can come in under it. |
 | `trips` | Number of planned trips |
 | `P(exceed)` | Fraction of scenarios where **any** trip overflowed at any point |
 | `E[ret]` | Mean number of unscheduled port returns per season |
 | `ret/trip` | `E[ret]` ÷ `trips`. Needed because a tighter buffer plans more trips, so the raw count can fall just by spreading the same risk more thinly. |
 | `mean time` | Mean realised time across scenarios |
+| `+/-95%` | Monte Carlo 95% interval on that mean. Scenario sampling only — it says nothing about solver restart noise, which is the larger term whenever two rows come from different solves. |
 | `p95 time` | 95th percentile — the bad-but-not-freak season |
+| `E[rep]` | Mean re-plans per season. Zero for every strategy but `repair`. |
+| `cap hit` | Fraction of scenarios that hit `max_repairs` and finished on backtrack detours instead. Anything above zero means those rows are not pure repair. |
 | `vs …` | That row's `mean` minus the reference row's `mean`. Positive = worse. The reference row is 0.0 by construction. |
 
 **Objective is summed vessel-hours, not calendar duration.** Two boats working
@@ -130,8 +171,18 @@ If `p5 > planned`, that plan never runs clean.
 
 1. Write `_walk_yours(...)` in `unified/stochastic_eval.py`, matching the
    signature of `_walk_backtrack`.
-2. Add it to the `STRATEGIES` dict.
+2. Add it to the `STRATEGIES` dict, and to `DETOUR_STRATEGIES` if it only adds
+   to an unchanged route rather than replacing one.
+3. If it needs more than the walker signature carries, give it a branch in
+   `_run_strategy` — that is where `preemptive`, `backtrack_last_free` and
+   `repair` get their extra arguments.
 
 Validation, CLI choices, and the parametrised tests in
-`tests/test_strategies.py` all read from that dict, so nothing else needs
-touching.
+`tests/test_strategies.py` all read from those two, so nothing else needs
+touching. Add the row to `CASES` in `experiments/strategies.py` and to the
+lists in `full_sweep.py` and `paired.py` to have it appear in the tables.
+
+`_STRATEGY_COLOURS` in `stochastic_eval.py` holds nine, which is what the sweep
+uses. A tenth wraps the palette and gives two strategies the same colour, so
+extend it and re-check the separation first. `plot_sweep_grid` warns when it
+runs short, but the figure is already wrong by then.

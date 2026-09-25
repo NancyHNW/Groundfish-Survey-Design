@@ -154,6 +154,9 @@ def run_heuristic_on_gfsp(ns=20, nv=2, cf=62.5, instance=1, method="grasp",
         # evaluator can reuse this solution outside the context
         result["trips"] = solution_to_trips(prob)
         result["instance"] = inst
+        # The per-station catch the solver actually planned against. Repair
+        # re-plans with it, so that it is no cruder than the planner it repairs.
+        result["planned_catch"] = np.asarray(prob.catch, dtype=float).reshape(-1)
 
         if verbose:
             print("\n--- Final Result ---")

@@ -27,7 +27,8 @@ from unified.evaluate import evaluate_heuristic_solution, solution_to_trips
 from unified.loaders import load_gfsp_full_problem
 from unified.problem import N_PORTS
 from unified.stochastic_catch import CatchSimulator
-from unified.stochastic_eval import STRATEGIES, StochasticEvaluator
+from unified.stochastic_eval import (DETOUR_STRATEGIES, STRATEGIES,
+                                     StochasticEvaluator)
 
 pytestmark = pytest.mark.full
 
@@ -176,13 +177,15 @@ def test_extracted_trip_times_match_the_objective(solved):
 # Stochastic evaluation
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("strategy", sorted(STRATEGIES))
+@pytest.mark.parametrize("strategy", sorted(DETOUR_STRATEGIES))
 def test_realised_time_is_never_below_planned(solved, scenarios, strategy):
-    """The one invariant no overflow strategy may break.
+    """The one invariant no detour strategy may break.
 
-    Every strategy adds detours and none removes work, so realised time is
-    bounded below by planned time in every scenario. A strategy that comes in
-    under it has lost work somewhere.
+    They add detours to an unchanged route and none removes work, so realised
+    time is bounded below by planned. One that comes in under it has lost work.
+
+    Repair is excluded on purpose: it replaces the route, so coming in under
+    the plan is the result rather than a bug. Coverage guards it instead.
     """
     evaluator = StochasticEvaluator(scenarios=scenarios)
     result = evaluator.evaluate(solved["trips"], solved["instance"],

@@ -1,9 +1,9 @@
 """Every buffer crossed with every overflow strategy, on the full problem.
 
 The buffer decides the routes, so each buffer needs its own solve. The strategy
-is chosen at sea once the plan is fixed, so all four strategies score the same
+is chosen at sea once the plan is fixed, so every strategy scores the same
 solution. That means the whole grid costs one solve per buffer, not one per
-cell -- 4 solves for 16 rows rather than 16.
+cell -- 4 solves for 36 rows rather than 36.
 
 Everything shares one scenario set, so differences between cells come from the
 plans and the responses rather than from resampling the catch.
@@ -18,22 +18,30 @@ import os
 import time
 from datetime import datetime
 
-from experiments.common import (CORE_COLUMNS, OUTPUT_DIR, base_parser,
-                                make_evaluator, print_table, save_csv,
-                                summarise, solve)
+from experiments.common import (CORE_COLUMNS, OUTPUT_DIR, REPAIR_COLUMNS,
+                                base_parser, make_evaluator, print_table,
+                                save_csv, summarise, solve)
 
 BUFFERS = (0.7, 0.8, 0.9, 1.0)
 
-# (label, evaluate kwargs). Same four as experiments.strategies.
+# (label, evaluate kwargs). Same set as experiments.strategies.
 STRATEGIES = [
     ("backtrack", {"strategy": "backtrack"}),
+    ("backtrack_last_free", {"strategy": "backtrack_last_free"}),
     ("forward", {"strategy": "forward"}),
     ("preemptive_0.8", {"strategy": "preemptive", "preemptive_threshold": 0.8}),
     ("preemptive_0.7", {"strategy": "preemptive", "preemptive_threshold": 0.7}),
+    ("repair_trip", {"strategy": "repair", "repair_scope": "trip"}),
+    ("repair_boat", {"strategy": "repair", "repair_scope": "boat"}),
+    ("repair_trip_2opt", {"strategy": "repair", "repair_scope": "trip",
+                          "repair_planner": "2opt"}),
+    ("repair_boat_2opt", {"strategy": "repair", "repair_scope": "boat",
+                          "repair_planner": "2opt"}),
 ]
 
-COLUMNS = ([("buffer", "buffer", 8, ".0%"), ("case", "strategy", 16, "")]
-           + CORE_COLUMNS
+# Width 20 fits the longest label, backtrack_last_free
+COLUMNS = ([("buffer", "buffer", 8, ".0%"), ("case", "strategy", 20, "")]
+           + CORE_COLUMNS + REPAIR_COLUMNS
            + [("feasible", "feas", 7, ""),
               ("vs_baseline", "vs 100%/bt", 12, "+.1f")])
 
@@ -68,14 +76,16 @@ def run(time_limit=300, n_scenarios=1000, scenario_seed=123,
               f"trips, feasible={det['feasible']}", flush=True)
 
         for label, kwargs in STRATEGIES:
-            result = evaluator.evaluate(det["trips"], det["instance"], **kwargs)
+            result = evaluator.evaluate(det["trips"], det["instance"],
+                                        planned_catch=det.get("planned_catch"),
+                                        **kwargs)
             row = summarise(result, det["planned_time"], len(det["trips"]),
                             feasible=det["feasible"],
                             buffer=buffer, case=label)
             rows.append(row)
-            print(f"    {label:16s} mean {row['mean']:8.1f}h  "
-                  f"p95 {row['p95']:8.1f}h  ret/trip {row['returns_per_trip']:.3f}",
-                  flush=True)
+            print(f"    {label:20s} mean {row['mean']:8.1f}h  "
+                  f"p95 {row['p95']:8.1f}h  "
+                  f"ret/trip {row['returns_per_trip']:.3f}", flush=True)
 
         # Written every buffer, so a crash late on does not lose the earlier work
         _finalise(rows)

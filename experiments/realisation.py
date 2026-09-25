@@ -11,13 +11,16 @@ single concrete season, which is what makes the overflow behaviour readable.
     python -m experiments.realisation --full --method tabu_combined
 """
 
-from experiments.common import (base_parser, describe_run, output_path, solve)
+from experiments.common import (base_parser, describe_run, output_path, solve,
+                                strategy_tag)
 
 
 def run(ns=20, nv=2, cf=62.5, instance=1, method="tabu_move", time_limit=10,
         catch_source="historical", capacity_buffer=1.0, strategy="backtrack",
-        preemptive_threshold=0.8, seed=None, full=False, catch_table=True,
-        home_ports=None):
+        preemptive_threshold=0.8, repair_scope="trip",
+        repair_planner="nn",
+        repair_solver_time=0.0, seed=None, full=False,
+        catch_table=True, home_ports=None):
     """Solve, draw one catch scenario, report and plot the realisation."""
     from unified.stochastic_catch import CatchSimulator
     from unified.stochastic_eval import (evaluate_single_realisation,
@@ -41,15 +44,21 @@ def run(ns=20, nv=2, cf=62.5, instance=1, method="tabu_move", time_limit=10,
     sim.fit()
     catch = sim.sample(n_scenarios=1)[0]
 
+    # One season, so recording the repaired routes is cheap and it is the only
+    # way the map shows what the boat did rather than what it planned to do.
     result = evaluate_single_realisation(
         trips, inst, catch, strategy=strategy,
-        preemptive_threshold=preemptive_threshold)
+        preemptive_threshold=preemptive_threshold,
+        planned_catch=det.get("planned_catch"), repair_scope=repair_scope,
+        repair_planner=repair_planner,
+        repair_solver_time=repair_solver_time, record_routes=True)
 
     _print_result(result, strategy, preemptive_threshold, seed)
 
-    tag = f"{method}-{strategy}"
+    label = strategy_tag(strategy, repair_scope, repair_planner)
+    tag = f"{method}-{label}"
     if capacity_buffer != 1.0:
-        tag = f"{method}-buf{capacity_buffer:g}-{strategy}"
+        tag = f"{method}-buf{capacity_buffer:g}-{label}"
 
     plot_realisation(trips, inst, result,
                      save_path=output_path("realisation", tag, inst,
@@ -88,16 +97,17 @@ def _print_result(result, strategy, threshold, seed):
     print(f"  overflow events:      {len(result['overflow_events'])}")
     print(f"  planned total time:   {result['original_total_time']:.1f} h")
     print(f"  actual total time:    {result['total_time']:.1f} h "
-          f"(+{result['time_penalty']:.1f} h, "
-          f"+{result['time_penalty'] / result['original_total_time']:.1%})")
+          f"({result['time_penalty']:+.1f} h, "
+          f"{result['time_penalty'] / result['original_total_time']:+.1%})")
 
     print("\n  Per-trip breakdown:")
     for i, td in enumerate(result["trip_details"]):
         flag = "  *** OVERFLOW" if td["exceeded"] else ""
+        # Signed: repair replaces the route, so a trip can come in under plan
         print(f"    Trip {i} (Boat {td['boat_id']}): "
               f"planned={td['original_time']:.1f}, "
               f"actual={td['adjusted_time']:.1f}, "
-              f"detour=+{td['detour_time']:.1f}{flag}")
+              f"change={td['detour_time']:+.1f}{flag}")
 
 
 if __name__ == "__main__":
@@ -121,6 +131,9 @@ if __name__ == "__main__":
         method=args.method, time_limit=args.time_limit,
         catch_source=args.catch_source,
         capacity_buffer=args.capacity_buffer, strategy=args.strategy,
+        repair_scope=args.repair_scope,
+        repair_planner=args.repair_planner,
+        repair_solver_time=args.repair_solver_time,
         preemptive_threshold=args.threshold, seed=args.seed, full=args.full,
         home_ports=args.home_ports,
         catch_table=args.catch_table)
