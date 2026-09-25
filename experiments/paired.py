@@ -24,7 +24,6 @@ COMPARISONS = {
         "baseline": "backtrack",
         "settings": [
             ("backtrack", {"strategy": "backtrack"}),
-            ("backtrack_last_free", {"strategy": "backtrack_last_free"}),
             ("forward", {"strategy": "forward"}),
             ("preemptive_0.8", {"strategy": "preemptive",
                                 "preemptive_threshold": 0.8}),

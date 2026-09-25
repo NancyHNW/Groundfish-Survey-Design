@@ -49,15 +49,38 @@ deterministic time need not win once catch is uncertain. Extra flags:
 `--methods grasp_only grasp_swap tabu_move`, `--no-histograms`.
 
 ### `strategies`
-Main table over nine rows — `backtrack`, `backtrack_last_free`, `forward`,
-`preemptive_0.8`, `preemptive_0.7`, and `repair` crossed with its two scopes
-and two re-planners — then a threshold sweep over 0.5–0.9. Extra flag:
+Main table over eight rows — `backtrack`, `forward`, `preemptive_0.8`,
+`preemptive_0.7`, and `repair` crossed with its two scopes and two
+re-planners — then a threshold sweep over 0.5–0.9. Extra flag:
 `--no-threshold-sweep`.
 
-`backtrack_last_free` exists to keep `repair` honest. Part of repair's gain is
-that an overflow on a trip's last station costs nothing — the boat was heading
-to port anyway — and plain `backtrack` overcharges that case. Measured against
-`backtrack_last_free` instead, what is left is the re-routing alone.
+**`backtrack` and `forward` disagree about what an overflow is**, and the
+difference is not a detail.
+
+Under `backtrack` the station that tips the hold over is **not fished**: its
+catch would not fit. The boat lands what it is carrying, sails back, tows that
+station, and carries on. So the out-and-back is real at every station, a
+trip's last one included, because the boat must still return for it. Two
+consequences: the hold leaves port carrying that station's catch rather than
+empty, and the catch is *not* re-drawn on the return — it belongs to the
+station in that scenario, every strategy has to see the same draw, and
+re-drawing would only ever follow a high draw and so flatter backtrack through
+regression to the mean.
+
+Under `forward` the catch **is** aboard, which is what lets the boat carry on
+from the port to the next station without losing it. That makes an overflow on
+a trip's last station nearly free — the next thing in the route was the port
+anyway, so only which port differs:
+
+```
+t(station → diverted port) + t(diverted port → end) − t(station → end)
+```
+
+exactly zero when the nearest port is the end port.
+
+`forward` used to charge a full out-and-back there, copied from backtrack, for
+a journey it never makes. Correcting that is worth several hours a season and
+is why `forward` now beats `repair` on the test problems.
 
 Repair re-plans against **true** capacity, not the buffered planning capacity
 the routes were built with. That is what a skipper would do at sea, but it
@@ -69,8 +92,8 @@ means repair partially undoes the buffer wherever the two are crossed.
 interval, and groups the settings into beats / reliably worse / cannot
 separate — a setting can separate from the baseline by being worse.
 
-Settings that differ only in scoring share one solve, so nine strategies over
-30 instances costs 30 solves, not 270.
+Settings that differ only in scoring share one solve, so eight strategies
+over 30 instances costs 30 solves, not 240.
 
 ### `realisation`
 Draws a single catch scenario and plots the planned route beside the route
@@ -174,7 +197,7 @@ If `p5 > planned`, that plan never runs clean.
 2. Add it to the `STRATEGIES` dict, and to `DETOUR_STRATEGIES` if it only adds
    to an unchanged route rather than replacing one.
 3. If it needs more than the walker signature carries, give it a branch in
-   `_run_strategy` — that is where `preemptive`, `backtrack_last_free` and
+   `_run_strategy` — that is where `preemptive`, `forward` and
    `repair` get their extra arguments.
 
 Validation, CLI choices, and the parametrised tests in

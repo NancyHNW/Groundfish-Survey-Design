@@ -52,10 +52,8 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         Pre-loaded time matrix (1175x1175). Loaded if not provided.
     strategy : str
         How to handle capacity overflow:
-        - "backtrack": go to nearest port, then resume the planned route
-          from the station where the overflow happened. (default)
-        - "backtrack_last_free": as backtrack, but an overflow on a trip's
-          last station is not charged an out-and-back.
+        - "backtrack": go to nearest port, then return and tow the station
+          that overflowed, which was not fished on the first pass. (default)
         - "forward": go to nearest port, then continue to the nearest
           unvisited station from that port (no backtracking).
         - "preemptive": return to nearest port when load reaches
@@ -253,7 +251,27 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
 def _walk_backtrack(station_ordinals, station_nodes, catch_vector,
                     boat_capacity, port_nodes, time_matrix,
                     trip_idx, boat_id, overflow_events):
-    """Original strategy: nearest port, then backtrack to resume the route."""
+    """Original strategy: nearest port, then backtrack to tow the station.
+
+    The station that triggers the overflow is **not** fished on the first pass:
+    its catch would not fit. The boat lands what it is carrying, returns, tows
+    that station, and carries on. So the out-and-back is real at every station
+    including a trip's last one, where the boat must still come back for it.
+
+    That makes the hold non-empty leaving port. It unloads what it had, sails
+    back, and tows the station -- so it resumes carrying that station's catch,
+    not nothing. Getting this wrong hides later overflows by giving the boat a
+    free station's worth of headroom.
+
+    The catch is **not** re-drawn on the return. It is a property of the
+    station in this scenario, every strategy has to see the same draw for the
+    comparison to mean anything, and re-drawing would only ever happen after a
+    high draw -- so it would flatter this strategy through regression to the
+    mean.
+
+    Contrast `_walk_forward`, which does not go back: there the catch *is*
+    aboard, which is why only that one needs a trip-boundary correction.
+    """
     cumulative_catch = 0.0
     detour_time = 0.0
 
@@ -264,7 +282,7 @@ def _walk_backtrack(station_ordinals, station_nodes, catch_vector,
             nearest_port, return_time = _find_nearest_port(
                 stn_node, port_nodes, time_matrix
             )
-            detour = 2 * return_time  # go to port and come back
+            detour = 2 * return_time  # to port, then back to tow the station
             detour_time += detour
 
             overflow_events.append({
@@ -277,20 +295,35 @@ def _walk_backtrack(station_ordinals, station_nodes, catch_vector,
                 "nearest_port": nearest_port,
                 "detour_time": detour,
             })
-            cumulative_catch = 0.0
+            # Empty at the port, then tow this station -- so the hold carries
+            # its catch onward. A station that fills a hold on its own is
+            # landed instead, or the boat would return to it forever.
+            station_catch = catch_vector[stn]
+            cumulative_catch = (station_catch
+                                if station_catch <= boat_capacity else 0.0)
 
     return detour_time
 
 
 def _walk_forward(station_ordinals, station_nodes, catch_vector,
                   boat_capacity, port_nodes, time_matrix,
-                  trip_idx, boat_id, overflow_events):
-    """Forward strategy: nearest port, then continue to nearest unvisited
-    station from that port instead of backtracking.
+                  trip_idx, boat_id, overflow_events, end_port):
+    """Forward strategy: nearest port, then carry on to the next station
+    instead of going back.
 
     Detour cost = time(overflow_station -> port) + time(port -> next_station)
                   - time(overflow_station -> next_station)
     i.e. the extra time compared to going directly to the next station.
+
+    Not going back is what fixes what an overflow means *here*: the catch is
+    already aboard. If it were not, this strategy would sail past that station
+    and never fish it. `_walk_backtrack` takes the other reading, goes back,
+    and tows it.
+
+    Because the catch is aboard, an overflow on a trip's **last** station costs
+    almost nothing -- the next thing in the route is the port the boat was
+    already heading for, so only which port differs. That case used to charge a
+    full out-and-back, copied from backtrack, for a journey never made.
     """
     cumulative_catch = 0.0
     detour_time = 0.0
@@ -312,9 +345,11 @@ def _walk_forward(station_ordinals, station_nodes, catch_vector,
                                  time_matrix[nearest_port, next_node])
                 detour = via_port_time - direct_time
             else:
-                # Last station in trip — just go to port and back
-                # (same as backtrack for the final station)
-                detour = 2 * time_to_port
+                # Last station of the trip: the boat was sailing to its end
+                # port next, so only the change of port costs anything.
+                detour = (time_to_port
+                          + time_matrix[nearest_port, end_port]
+                          - time_matrix[stn_node, end_port])
 
             detour_time += detour
 
@@ -370,49 +405,6 @@ def _walk_preemptive(station_ordinals, station_nodes, catch_vector,
                 "nearest_port": nearest_port,
                 "detour_time": detour,
                 "preemptive": preemptive,
-            })
-            cumulative_catch = 0.0
-
-    return detour_time
-
-
-def _walk_backtrack_last_free(station_ordinals, station_nodes, catch_vector,
-                              boat_capacity, port_nodes, time_matrix,
-                              trip_idx, boat_id, overflow_events, end_port):
-    """backtrack, except filling up on a trip's last station is not charged
-    an out-and-back -- the boat was heading to port anyway.
-
-    Exists to split repair's gain in two. Part of it is genuine re-routing and
-    part is that backtrack overcharges this case; measured against this
-    baseline instead, only the first part is left.
-    """
-    cumulative_catch = 0.0
-    detour_time = 0.0
-    last = len(station_ordinals) - 1
-
-    for i, stn in enumerate(station_ordinals):
-        cumulative_catch += catch_vector[stn]
-        if cumulative_catch > boat_capacity:
-            stn_node = station_nodes[i]
-            nearest_port, return_time = _find_nearest_port(
-                stn_node, port_nodes, time_matrix
-            )
-            if i == last:
-                detour = (return_time + time_matrix[nearest_port, end_port]
-                          - time_matrix[stn_node, end_port])
-            else:
-                detour = 2 * return_time
-            detour_time += detour
-
-            overflow_events.append({
-                "trip_idx": trip_idx,
-                "boat_id": boat_id,
-                "station_ordinal": stn,
-                "station_node": stn_node,
-                "cumulative_catch": cumulative_catch,
-                "capacity": boat_capacity,
-                "nearest_port": nearest_port,
-                "detour_time": detour,
             })
             cumulative_catch = 0.0
 
@@ -894,7 +886,6 @@ def _walk_repair(station_ordinals, station_nodes, catch_vector, boat_capacity,
 # the experiment CLIs read their --strategy choices from it.
 STRATEGIES = {
     "backtrack": _walk_backtrack,
-    "backtrack_last_free": _walk_backtrack_last_free,
     "forward": _walk_forward,
     "preemptive": _walk_preemptive,
     "repair": _walk_repair,
@@ -902,8 +893,7 @@ STRATEGIES = {
 
 # The ones that model an overflow as a detour on an unchanged route, and so can
 # never come in under the plan. Repair re-routes, so it can.
-DETOUR_STRATEGIES = ("backtrack", "backtrack_last_free", "forward",
-                     "preemptive")
+DETOUR_STRATEGIES = ("backtrack", "forward", "preemptive")
 
 
 def _run_strategy(strategy, preemptive_threshold, station_ordinals,
@@ -924,7 +914,7 @@ def _run_strategy(strategy, preemptive_threshold, station_ordinals,
 
     if strategy == "preemptive":
         return walk(*head, preemptive_threshold, *tail)
-    if strategy == "backtrack_last_free":
+    if strategy == "forward":
         return walk(*head, *tail, trip["nodes"][-1])
     if strategy == "repair":
         return walk(*head, *tail, trip["nodes"], planned_catch,
