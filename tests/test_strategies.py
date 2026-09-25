@@ -18,7 +18,8 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from unified.problem import ProblemInstance
-from unified.stochastic_eval import STRATEGIES, evaluate_single_realisation
+from unified.stochastic_eval import (DETOUR_STRATEGIES, STRATEGIES,
+                                     evaluate_single_realisation)
 
 STRATEGY_NAMES = sorted(STRATEGIES)
 
@@ -37,11 +38,18 @@ def make_instance(capacity=250.0):
 
 
 def make_trips():
+    """Two trips whose declared times match what their nodes actually walk.
+
+    At travel=5.0: trip 0 is 7 legs (35.0) with 6 after the first station
+    (30.0), trip 1 is 5 legs (25.0) with 4 after the first (20.0). The detour
+    strategies never check, but repair recomputes from the nodes, so a fixture
+    that disagreed with itself made a correct implementation look broken.
+    """
     return [
         {"boat_id": 0, "nodes": [0, 13, 14, 15, 16, 17, 18, 0],
-         "total_time": 50.0, "fish_time": 30.0, "catch": 300.0},
+         "total_time": 35.0, "fish_time": 30.0, "catch": 300.0},
         {"boat_id": 1, "nodes": [0, 19, 20, 21, 22, 0],
-         "total_time": 40.0, "fish_time": 25.0, "catch": 200.0},
+         "total_time": 25.0, "fish_time": 20.0, "catch": 200.0},
     ]
 
 
@@ -55,8 +63,64 @@ def make_time_matrix(travel=5.0):
 # Registry
 # ---------------------------------------------------------------------------
 
-def test_registry_lists_the_three_strategies():
-    assert set(STRATEGIES) == {"backtrack", "forward", "preemptive"}
+# Exact output of the three detour strategies. Repair needed the trip loop to
+# allow a strategy to change a trip's time rather than only add to it; these
+# pin that nothing else moved. The returns and detours are the pre-repair
+# values; the totals shifted with the fixture, whose times now match its nodes.
+GOLDEN = {
+    ("light", "backtrack"): (60.0, 0, [0.0, 0.0]),
+    ("light", "forward"): (60.0, 0, [0.0, 0.0]),
+    ("light", "preemptive"): (60.0, 0, [0.0, 0.0]),
+    ("heavy", "backtrack"): (80.0, 2, [10.0, 10.0]),
+    ("heavy", "forward"): (75.0, 2, [5.0, 10.0]),
+    ("heavy", "preemptive"): (110.0, 5, [30.0, 20.0]),
+    ("mid", "backtrack"): (70.0, 1, [10.0, 0.0]),
+    ("mid", "forward"): (70.0, 1, [10.0, 0.0]),
+    ("mid", "preemptive"): (70.0, 1, [10.0, 0.0]),
+}
+
+
+def golden_catch(case):
+    if case == "light":
+        return np.full(581, 30.0)
+    if case == "heavy":
+        return np.full(581, 200.0)
+    catch = np.full(581, 50.0)
+    catch[0] = catch[1] = 100.0
+    catch[2] = 120.0
+    return catch
+
+
+@pytest.mark.parametrize("case,strategy", sorted(GOLDEN))
+def test_detour_strategies_are_unchanged(case, strategy):
+    """The three detour strategies must not move when repair is added."""
+    total, returns, detours = GOLDEN[(case, strategy)]
+    result = evaluate_single_realisation(
+        make_trips(), make_instance(), golden_catch(case),
+        time_matrix=make_time_matrix(), strategy=strategy)
+
+    assert result["total_time"] == pytest.approx(total)
+    assert result["n_unscheduled_returns"] == returns
+    assert [d["detour_time"] for d in result["trip_details"]] == \
+        pytest.approx(detours)
+
+
+def test_fixture_times_match_its_own_nodes():
+    """Guards the fixture itself. Repair recomputes time from the nodes."""
+    tm = make_time_matrix(travel=5.0)
+    for trip in make_trips():
+        nodes = trip["nodes"]
+        walked = sum(tm[a, b] for a, b in zip(nodes, nodes[1:]))
+        assert trip["total_time"] == pytest.approx(walked)
+
+        first_station = next(i for i, n in enumerate(nodes) if n >= 13)
+        fished = sum(tm[a, b] for a, b in
+                     zip(nodes[first_station:], nodes[first_station + 1:]))
+        assert trip["fish_time"] == pytest.approx(fished)
+
+
+def test_registry_lists_the_detour_strategies():
+    assert {"backtrack", "forward", "preemptive"} <= set(STRATEGIES)
     assert all(callable(fn) for fn in STRATEGIES.values())
 
 
@@ -71,9 +135,12 @@ def test_unknown_strategy_is_rejected():
 # Invariants that must hold for every strategy
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("strategy", STRATEGY_NAMES)
+@pytest.mark.parametrize("strategy", DETOUR_STRATEGIES)
 def test_realised_time_never_below_planned(strategy):
-    """Strategies only ever add detours, so realised >= planned always."""
+    """Detour strategies only add to an unchanged route, so realised >= planned.
+
+    Not asked of repair, which replaces the route and so may come in under it.
+    """
     result = evaluate_single_realisation(
         make_trips(), make_instance(), np.full(581, 90.0),
         time_matrix=make_time_matrix(), strategy=strategy)
@@ -93,7 +160,7 @@ def test_light_catch_costs_nothing(strategy):
         time_matrix=make_time_matrix(), strategy=strategy)
     assert not result["capacity_exceeded"]
     assert result["n_unscheduled_returns"] == 0
-    assert result["total_time"] == pytest.approx(90.0)
+    assert result["total_time"] == pytest.approx(60.0)
     assert result["overflow_events"] == []
 
 
@@ -132,7 +199,7 @@ def test_backtrack_detour_is_there_and_back():
 
     trip0 = result["trip_details"][0]
     assert trip0["detour_time"] == pytest.approx(10.0)   # 2 x 5.0
-    assert trip0["adjusted_time"] == pytest.approx(60.0)
+    assert trip0["adjusted_time"] == pytest.approx(45.0)  # 35.0 planned + 10.0
 
 
 def test_preemptive_triggers_before_capacity_is_reached():
