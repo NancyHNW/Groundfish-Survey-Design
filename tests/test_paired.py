@@ -148,11 +148,12 @@ def test_every_block_uses_the_same_seed_across_settings(stub_solve):
 
 
 def test_only_eval_keys_reach_the_evaluator(stub_solve):
+    """Plus planned_catch, which the harness supplies rather than the setting."""
     evaluator = StubEvaluator(_flat)
     paired_compare(STRATEGIES, "backtrack", instances=[1],
                    evaluator=evaluator, progress=False)
     for call in evaluator.calls:
-        assert set(call) <= set(EVAL_KEYS)
+        assert set(call) <= set(EVAL_KEYS) | {"planned_catch"}
     assert {c.get("strategy") for c in evaluator.calls} == {
         "backtrack", "forward", "preemptive"}
 

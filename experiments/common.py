@@ -180,6 +180,11 @@ def summarise(result, planned, n_trips, feasible=None, **extra):
         "mc_ci95": 1.96 * se,
         "p5": td["p5"],
         "p95": td["p95"],
+        # Repair only, and zero everywhere else. Carried so a capped run is
+        # visible: past the cap repair gives up and sails on backtrack, which
+        # otherwise looks like a clean result.
+        "e_repairs": result.get("expected_repairs", 0.0),
+        "p_cap_hit": result.get("p_repair_cap_hit", 0.0),
     })
     row.update(_returns_error(result, e_returns, n_trips))
     if feasible is not None:
@@ -188,7 +193,9 @@ def summarise(result, planned, n_trips, feasible=None, **extra):
 
 
 def sweep_solve(param, values, evaluator, key=None, fmt=None,
-                strategy="backtrack", preemptive_threshold=0.8, **fixed):
+                strategy="backtrack", preemptive_threshold=0.8,
+                repair_scope="trip", repair_planner="nn",
+                repair_solver_time=0.0, **fixed):
     """Re-solve for each value of param. Use when the sweep changes the routes.
 
     buffers sweeps capacity_buffer, monte_carlo sweeps method.
@@ -214,13 +221,17 @@ def sweep_solve(param, values, evaluator, key=None, fmt=None,
         det = solve(**{param: value}, **fixed)
         result = evaluator.evaluate(
             det["trips"], det["instance"], strategy=strategy,
-            preemptive_threshold=preemptive_threshold)
+            preemptive_threshold=preemptive_threshold,
+            repair_scope=repair_scope, repair_planner=repair_planner,
+            repair_solver_time=repair_solver_time,
+            planned_catch=det.get("planned_catch"))
         row = summarise(result, det["planned_time"], len(det["trips"]),
                         feasible=det["feasible"], **{key: value})
         yield value, det, result, row
 
 
-def sweep_eval(trips, inst, cases, evaluator, planned, key="case"):
+def sweep_eval(trips, inst, cases, evaluator, planned, key="case",
+               planned_catch=None):
     """Re-score one fixed solution under each case. Routes stay the same.
 
     The overflow strategy gets picked at sea, after the plan is fixed, so every
@@ -235,7 +246,8 @@ def sweep_eval(trips, inst, cases, evaluator, planned, key="case"):
     planned : float, planned time, the same for every row
     """
     for label, kwargs in cases:
-        result = evaluator.evaluate(trips, inst, **kwargs)
+        result = evaluator.evaluate(trips, inst, planned_catch=planned_catch,
+                                    **kwargs)
         row = summarise(result, planned, len(trips), **{key: label})
         yield label, result, row
 
@@ -259,10 +271,22 @@ def add_baseline_delta(rows, key, baseline_value, column="vs_baseline"):
 # Paired comparison
 # ---------------------------------------------------------------------------
 
+def strategy_tag(strategy, repair_scope="trip", repair_planner="nn"):
+    """Name a run's strategy for its output filename.
+
+    Scope and planner have to be in the name, or two repair runs write over
+    each other's CSV and figure.
+    """
+    if strategy != "repair":
+        return strategy
+    return f"repair-{repair_scope}-{repair_planner}"
+
+
 # Evaluator kwargs; everything else in a setting goes to solve(). Settings
 # differing only in these share one solve -- the strategy is picked at sea
 # against a fixed plan, so re-solving per strategy would break the pairing.
-EVAL_KEYS = ("strategy", "preemptive_threshold", "max_repairs")
+EVAL_KEYS = ("strategy", "preemptive_threshold", "max_repairs",
+             "repair_scope", "repair_planner", "repair_solver_time")
 
 
 def parse_instances(text):
@@ -363,8 +387,9 @@ def paired_compare(settings, baseline, instances=(1,), solver_seeds=(42,),
             det = solve(instance=inst_no, seed=seed, verbose=False,
                         **solve_kw, **fixed)
             for label, eval_kw in members:
-                result = evaluator.evaluate(det["trips"], det["instance"],
-                                            **eval_kw)
+                result = evaluator.evaluate(
+                    det["trips"], det["instance"],
+                    planned_catch=det.get("planned_catch"), **eval_kw)
                 block_rows.append(summarise(
                     result, det["planned_time"], len(det["trips"]),
                     feasible=det["feasible"],
@@ -480,6 +505,13 @@ CORE_COLUMNS = [
     ("p95", "p95 time", 10, ".1f"),
 ]
 
+# Add to a table that scores repair. Zero on every other strategy, so they are
+# noise in tables that have none.
+REPAIR_COLUMNS = [
+    ("e_repairs", "E[rep]", 8, ".2f"),
+    ("p_cap_hit", "cap hit", 9, ".1%"),
+]
+
 
 def print_table(rows, columns, title=None):
     """Print rows as a fixed-width table.
@@ -571,12 +603,26 @@ def base_parser():
     stoch.add_argument("--scenario-seed", type=int, default=123,
                        help="Seed for the shared scenario set (default: 123)")
     # Choices come from the registry, so adding a strategy needs no CLI edit
-    from unified.stochastic_eval import STRATEGIES
+    from unified.stochastic_eval import (REPAIR_PLANNERS, REPAIR_SCOPES,
+                                         STRATEGIES)
     stoch.add_argument("--strategy", default="backtrack",
                        choices=sorted(STRATEGIES),
                        help="Overflow response (default: backtrack)")
     stoch.add_argument("--threshold", type=float, default=0.8,
                        help="Preemptive return threshold (default: 0.8)")
+    stoch.add_argument("--repair-scope", default="trip",
+                       choices=list(REPAIR_SCOPES),
+                       help="How much repair re-plans: the overflowed trip, or "
+                            "everything that boat has left (default: trip)")
+    stoch.add_argument("--repair-planner", default="nn",
+                       choices=list(REPAIR_PLANNERS),
+                       help="What repair re-plans with, worst to best: nn, "
+                            "2opt (nn then 2-opt), solver (greedy+TSP, the "
+                            "same heuristic that built the routes, ~1000x "
+                            "slower). Default: nn")
+    stoch.add_argument("--repair-solver-time", type=float, default=0.0,
+                       help="Seconds of restarts per repair when "
+                            "--repair-planner solver (default: 0, one pass)")
 
     return p
 
