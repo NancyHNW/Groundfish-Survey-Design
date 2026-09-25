@@ -181,8 +181,13 @@ def test_multiple_overflows_in_one_trip():
 
     # Trip with 3 stations, each with 100 kg catch
     # Station 0: cumulative 100 (ok)
-    # Station 1: cumulative 200 > 150 -> overflow #1, reset to 0
-    # Station 2: cumulative 100 (ok)
+    # Station 1: cumulative 200 > 150 -> overflow #1. Station 1 was not
+    #            fished, so the boat lands station 0, returns, tows station 1
+    #            -> hold 100
+    # Station 2: cumulative 200 > 150 -> overflow #2
+    #
+    # This asserted 1 while the docstring said two, back when the hold reset
+    # to empty and gave the boat a free station's worth of headroom.
     trips = [
         {
             "boat_id": 0,
@@ -201,8 +206,8 @@ def test_multiple_overflows_in_one_trip():
     trip0 = result["trip_details"][0]
     print(f"  Trip 0 unscheduled: {trip0['n_unscheduled_returns']}, detour: {trip0['detour_time']}")
 
-    assert result["n_unscheduled_returns"] == 1, \
-        f"Should have 1 overflow (at stn 1), got {result['n_unscheduled_returns']}"
+    assert result["n_unscheduled_returns"] == 2, \
+        f"Should have 2 overflows, got {result['n_unscheduled_returns']}"
     print("PASS: multiple overflows\n")
 
 

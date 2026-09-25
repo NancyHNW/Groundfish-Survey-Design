@@ -12,7 +12,7 @@ from experiments.common import (CORE_COLUMNS, REPAIR_COLUMNS,
                                 describe_run, make_evaluator, output_path,
                                 print_table, save_csv, solve, sweep_eval)
 
-# Width 20 fits the longest label, backtrack_last_free
+# Width 20 fits the longest label, repair_trip_2opt
 COLUMNS = ([("case", "case", 20, "")] + CORE_COLUMNS + REPAIR_COLUMNS
            + [("vs_backtrack", "vs backtr", 11, "+.1f")])
 
@@ -21,7 +21,6 @@ THRESHOLD_COLUMNS = ([("case", "alpha", 10, "")] + CORE_COLUMNS)
 # (label, evaluate kwargs), one row each in the main table
 CASES = [
     ("backtrack", {"strategy": "backtrack"}),
-    ("backtrack_last_free", {"strategy": "backtrack_last_free"}),
     ("forward", {"strategy": "forward"}),
     ("preemptive_0.8", {"strategy": "preemptive", "preemptive_threshold": 0.8}),
     ("preemptive_0.7", {"strategy": "preemptive", "preemptive_threshold": 0.7}),

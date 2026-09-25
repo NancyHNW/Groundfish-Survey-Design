@@ -27,7 +27,6 @@ BUFFERS = (0.7, 0.8, 0.9, 1.0)
 # (label, evaluate kwargs). Same set as experiments.strategies.
 STRATEGIES = [
     ("backtrack", {"strategy": "backtrack"}),
-    ("backtrack_last_free", {"strategy": "backtrack_last_free"}),
     ("forward", {"strategy": "forward"}),
     ("preemptive_0.8", {"strategy": "preemptive", "preemptive_threshold": 0.8}),
     ("preemptive_0.7", {"strategy": "preemptive", "preemptive_threshold": 0.7}),
@@ -39,7 +38,7 @@ STRATEGIES = [
                           "repair_planner": "2opt"}),
 ]
 
-# Width 20 fits the longest label, backtrack_last_free
+# Width 20 fits the longest label, repair_trip_2opt
 COLUMNS = ([("buffer", "buffer", 8, ".0%"), ("case", "strategy", 20, "")]
            + CORE_COLUMNS + REPAIR_COLUMNS
            + [("feasible", "feas", 7, ""),

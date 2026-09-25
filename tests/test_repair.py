@@ -141,7 +141,11 @@ def test_resplit_of_nothing_is_nothing():
 # ---- the free trip-boundary return ----------------------------------------
 
 def test_overflow_on_the_last_station_is_not_charged_an_out_and_back():
-    """The boat was heading to port anyway, so only the port differs."""
+    """Repair has nothing left to re-plan, so only the change of port costs.
+
+    Backtrack pays a full out-and-back here because under its reading the
+    station was never fished and must be returned to.
+    """
     catch = np.full(581, 50.0)
     catch[0] = catch[1] = 100.0
     catch[2] = 120.0                       # trip 0's last station
@@ -153,31 +157,6 @@ def test_overflow_on_the_last_station_is_not_charged_an_out_and_back():
     assert repaired["trip_details"][0]["detour_time"] < \
         back["trip_details"][0]["detour_time"]
 
-
-def test_backtrack_last_free_only_changes_the_last_station_case():
-    """Mid-trip overflows must cost exactly what backtrack charges."""
-    catch = np.full(581, 50.0)
-    catch[0] = 150.0
-    catch[1] = 150.0                       # station 2 still ahead
-
-    tm = make_time_matrix(travel=5.0)
-    assert run(catch, strategy="backtrack_last_free", tm=tm)["total_time"] == \
-        pytest.approx(run(catch, strategy="backtrack", tm=tm)["total_time"])
-
-
-def test_backtrack_last_free_is_cheaper_on_a_last_station_overflow():
-    catch = np.full(581, 50.0)
-    catch[0] = catch[1] = 100.0
-    catch[2] = 120.0
-
-    tm = make_time_matrix(travel=5.0)
-    free = run(catch, strategy="backtrack_last_free", tm=tm)
-    back = run(catch, strategy="backtrack", tm=tm)
-    assert free["total_time"] < back["total_time"]
-    assert free["n_unscheduled_returns"] == back["n_unscheduled_returns"]
-
-
-# ---- termination ----------------------------------------------------------
 
 def test_absurd_catch_terminates_and_reports_the_cap():
     """Every station overflowing on its own must still finish the season.
@@ -292,8 +271,7 @@ def test_recording_does_not_change_any_number():
 def test_detour_strategies_record_nothing():
     """They never replace a route, so there is nothing to record."""
     catch = np.full(581, 200.0)
-    for strategy in ("backtrack", "backtrack_last_free", "forward",
-                     "preemptive"):
+    for strategy in ("backtrack", "forward", "preemptive"):
         assert run(catch, strategy=strategy,
                    record_routes=True)["repaired_routes"] == []
 

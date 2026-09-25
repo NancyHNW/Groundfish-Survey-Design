@@ -63,19 +63,17 @@ def make_time_matrix(travel=5.0):
 # Registry
 # ---------------------------------------------------------------------------
 
-# Exact output of the three detour strategies. Repair needed the trip loop to
-# allow a strategy to change a trip's time rather than only add to it; these
-# pin that nothing else moved. The returns and detours are the pre-repair
-# values; the totals shifted with the fixture, whose times now match its nodes.
+# Exact output of the three detour strategies. A tripwire, not a spec: if these
+# move, find what changed the model before editing the numbers.
 GOLDEN = {
     ("light", "backtrack"): (60.0, 0, [0.0, 0.0]),
     ("light", "forward"): (60.0, 0, [0.0, 0.0]),
     ("light", "preemptive"): (60.0, 0, [0.0, 0.0]),
-    ("heavy", "backtrack"): (80.0, 2, [10.0, 10.0]),
-    ("heavy", "forward"): (75.0, 2, [5.0, 10.0]),
+    ("heavy", "backtrack"): (90.0, 3, [20.0, 10.0]),
+    ("heavy", "forward"): (65.0, 2, [5.0, 0.0]),
     ("heavy", "preemptive"): (110.0, 5, [30.0, 20.0]),
     ("mid", "backtrack"): (70.0, 1, [10.0, 0.0]),
-    ("mid", "forward"): (70.0, 1, [10.0, 0.0]),
+    ("mid", "forward"): (60.0, 1, [0.0, 0.0]),
     ("mid", "preemptive"): (70.0, 1, [10.0, 0.0]),
 }
 
@@ -265,11 +263,12 @@ def test_forward_and_backtrack_differ_on_a_mid_trip_overflow():
     assert back["total_time"] != fwd["total_time"]
 
 
-def test_forward_matches_backtrack_when_overflow_is_at_the_last_station():
-    """With nothing left to continue to, forward has to behave as backtrack.
+def test_forward_is_cheaper_than_backtrack_at_a_trip_last_station():
+    """They used to be identical here. Now only backtrack goes back.
 
-    Documented behaviour rather than a coincidence: a boat that fills at the
-    final station of a trip was heading to port regardless.
+    Forward has the station's catch aboard and the port was its next stop
+    anyway, so it pays only the change of port. Backtrack did not fish the
+    station, so it must return for it and pays the full out-and-back.
     """
     tm = make_time_matrix(travel=5.0)
     catch = np.full(581, 50.0)
@@ -282,4 +281,5 @@ def test_forward_matches_backtrack_when_overflow_is_at_the_last_station():
     fwd = evaluate_single_realisation(trips, inst, catch, time_matrix=tm,
                                       strategy="forward")
 
-    assert back["total_time"] == pytest.approx(fwd["total_time"])
+    assert fwd["total_time"] < back["total_time"]
+    assert fwd["trip_details"][0]["detour_time"] == pytest.approx(0.0)
