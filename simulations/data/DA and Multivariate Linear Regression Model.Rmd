@@ -474,4 +474,4 @@ drop1(model_2, test = "F")
 ```
 
 
-## DROP BAROMETER I FORGOR
+## Drop barometer

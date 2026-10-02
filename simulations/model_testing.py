@@ -16,11 +16,11 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / 'data' / 'spring_historical_english.xlsx'
 
 START_YEAR = 2002
-END_YEAR = 2021       # 20 years: 2002-2021 inclusive
+END_YEAR = 2022      # 20 years: 2002-2022 inclusive
 
 N_TRAIN = 10
-N_SIMULATIONS = 500
-RANDOM_SEED = 247012216
+N_SIMULATIONS = 1000
+RANDOM_SEED = 818 #247012216
 
 # ============================================================
 # LOAD DATA

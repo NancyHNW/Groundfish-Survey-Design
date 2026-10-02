@@ -134,7 +134,13 @@ def plot_single_station(distributions, station_id, ax=None, n_points=500,
             ax.hist(station_catches, bins=15, density=True, alpha=0.4,
                      color='darkorange', label='Historical catch (observed)')
 
-    ax.axvline(mean, color='steelblue', linestyle='--', lw=1)
+    ax.axvline(
+    mean,
+    color='steelblue',
+    linestyle='--',
+    lw=1,
+    label=f'Mean = {mean:.0f} kg'
+)
     ax.set_xlabel('Catch (kg)')
     ax.set_ylabel('Density')
     ax.set_title(f'Fitted Catch Distribution — Station {station_id}')
@@ -458,10 +464,6 @@ if __name__ == '__main__':
     )
 
     plt.tight_layout()
-    plt.savefig(
-        'single_station_normal_distribution.png',
-        dpi=150
-    )
     plt.show()
 
 
@@ -476,10 +478,6 @@ if __name__ == '__main__':
     )
 
     plt.tight_layout()
-    plt.savefig(
-        'single_station_gamma_distribution.png',
-        dpi=150
-    )
     plt.show()
 
 
@@ -494,22 +492,46 @@ if __name__ == '__main__':
     )
 
     plt.tight_layout()
-    plt.savefig(
-        'single_station_lognormal_distribution.png',
-        dpi=150
-    )
+
     plt.show()
 
 
+
     # ============================================================
-    # Plot 4: All stations — Normal distributions overlaid
+    # Plot all 3 distributions in one row
     # ============================================================
 
-    plot_all_stations(station_dists)
+    first_station = next(iter(station_dists))
+
+    fig, axes = plt.subplots(
+        1, 3,
+        figsize=(18, 5)
+    )
+
+    # Plot 1: Normal
+    plot_single_station(
+        station_dists,
+        first_station,
+        show_hist_data=df,
+        ax=axes[0]
+    )
+
+    # Plot 2: Gamma
+    plot_single_gamma(
+        gamma_station_dists,
+        first_station,
+        show_hist_data=df,
+        ax=axes[1]
+    )
+
+    # Plot 3: Log-normal
+    plot_single_lognormal(
+        lognormal_station_dists,
+        first_station,
+        show_hist_data=df,
+        ax=axes[2]
+    )
 
     plt.tight_layout()
-    plt.savefig(
-        'all_stations_normal_overlaid.png',
-        dpi=150
-    )
+
     plt.show()
