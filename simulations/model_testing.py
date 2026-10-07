@@ -20,7 +20,7 @@ END_YEAR = 2022      # 20 years: 2002-2022 inclusive
 
 N_TRAIN = 10
 N_SIMULATIONS = 1000
-RANDOM_SEED = 818 #247012216
+RANDOM_SEED = 566 #247012216 %566 %818
 
 # ============================================================
 # LOAD DATA
@@ -98,7 +98,6 @@ print()
 # ============================================================
 # FUNCTION TO SIMULATE NORMAL MODEL
 # ============================================================
-
 def simulate_normal(distributions, station_ids, n_simulations, rng):
 
     simulated_totals = []
@@ -221,7 +220,6 @@ print()
 # ============================================================
 # SIMULATE EACH MODEL
 # ============================================================
-
 normal_simulations = simulate_normal(
     normal_distributions,
     station_ids,
@@ -375,41 +373,41 @@ simulated_means = [
 
 actual_mean = actual_test_mean
 
-plt.figure(figsize=(8, 6))
+# plt.figure(figsize=(8, 6))
 
-plt.bar(model_names, simulated_means, alpha=0.8)
+# plt.bar(model_names, simulated_means, alpha=0.8)
 
-# Actual testing mean
-plt.axhline(
-    actual_mean,
-    linestyle='--',
-    label='Actual testing mean'
-)
+# # Actual testing mean
+# plt.axhline(
+#     actual_mean,
+#     linestyle='--',
+#     label='Actual testing mean'
+# )
 
-plt.ylabel('Total catch')
-plt.title('Model Estimated Mean vs Actual Testing Mean')
-plt.legend()
+# plt.ylabel('Total catch')
+# plt.title('Model Estimated Mean vs Actual Testing Mean')
+# plt.legend()
 
-plt.tight_layout()
-plt.show()
+# plt.tight_layout()
+# plt.show()
 
 
-# 2) Percentage error
-percentage_errors = [
-    normal_results['Percentage Error (%)'],
-    gamma_results['Percentage Error (%)'],
-    lognormal_results['Percentage Error (%)']
-]
+# # 2) Percentage error
+# percentage_errors = [
+#     normal_results['Percentage Error (%)'],
+#     gamma_results['Percentage Error (%)'],
+#     lognormal_results['Percentage Error (%)']
+# ]
 
-plt.figure(figsize=(8, 6))
+# plt.figure(figsize=(8, 6))
 
-plt.bar(model_names, percentage_errors, alpha=0.8)
+# plt.bar(model_names, percentage_errors, alpha=0.8)
 
-plt.ylabel('Absolute percentage error (%)')
-plt.title('Model Performance: Percentage Error')
+# plt.ylabel('Absolute percentage error (%)')
+# plt.title('Model Performance: Percentage Error')
 
-plt.tight_layout()
-plt.show()
+# plt.tight_layout()
+# plt.show()
 
 
 # 3) 95% CI compared with testing mean
@@ -455,7 +453,7 @@ plt.axhline(
 
 plt.xticks(x, model_names)
 plt.ylabel('Total catch')
-plt.title('Model Simulations and 95% Confidence Intervals')
+plt.title(f'Model Simulations and 95% Confidence Intervals (Seed = {RANDOM_SEED})')
 plt.legend()
 
 plt.tight_layout()
@@ -669,7 +667,6 @@ print("\nLognormal model:")
 print(lognormal_historical_results)
 
 def summarise_historical_performance(results):
-
     return {
         'Number of stations': len(results),
 
