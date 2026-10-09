@@ -173,8 +173,8 @@ E[p_i] = alpha_i / alpha_0
 ## Generate simulated years
 Once the model is fitted, we can generate station-proportion vectos
 ```{r}
-#Adjust this accordingly. Here for 10000 years
-n_sim <- 10000
+#Adjust this accordingly. Here for 1000 years
+n_sim <- 1000
 
 alpha_matrix <- matrix(
   alpha,

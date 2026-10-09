@@ -20,7 +20,7 @@ END_YEAR = 2022      # 20 years: 2002-2022 inclusive
 
 N_TRAIN = 10
 N_SIMULATIONS = 1000
-RANDOM_SEED = 566 #247012216 %566 %818
+RANDOM_SEED = 818 #247012216 %566 %818
 
 # ============================================================
 # LOAD DATA

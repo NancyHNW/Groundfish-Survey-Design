@@ -15,6 +15,7 @@ install.packages("corrplot")
 library(readxl)
 library(corrplot)
 ```
+
 ```{r}
 # install.packages("doBy")
 # install.packages("pbkrtest")
@@ -558,5 +559,293 @@ plot(model_2)
 drop1(model_2, test = "F")
 ```
 
+## TESTING
+Test model 2 and model 1
+1. Extract 2002-2022, divide into 10 years training/testing
+2. Fit regression model
+3. Predict catch for testing years
+4. Generate 1000 surveys
+5. Repeat 100 times
 
-## Drop barometer
+```{r}
+library(ggplot2)
+```
+
+Set up both models
+```{r}
+library(dplyr)
+
+df <- read_excel("spring_historical_english.xlsx")
+
+# Create log catch
+df <- df |>
+  mutate(
+    catch = as.numeric(catch),
+    log_catch = log(catch)
+  )
+
+# Formulas from your two fitted models
+model_formulas <- list(
+  "Preliminary Model" = formula(preliminary_model),
+  "Model 2" = formula(model_2)
+)
+
+# All predictors required by both models
+required_variables <- unique(
+  unlist(lapply(model_formulas, all.vars))
+)
+
+# Keep rows with valid response and predictor values
+df_test <- df |>
+  filter(
+    catch > 0,
+    is.finite(catch),
+    is.finite(log_catch),
+    if_all(all_of(required_variables), ~ !is.na(.x))
+  )
+
+# Restrict testing to the chosen historical period
+years <- sort(unique(
+  df_test$year[
+    df_test$year >= 2002 &
+    df_test$year <= 2022
+  ]
+))
+
+years <- tail(years, 20)
+
+if (length(years) != 20) {
+  stop("There must be 20 usable years in the selected period.")
+}
+
+df_test <- df_test |>
+  filter(year %in% years)
+```
+
+
+Run both models on same tests
+```{r}
+set.seed(566)
+
+n_iterations <- 100
+n_simulations <- 1000
+
+results_list <- vector("list", n_iterations * 2)
+result_index <- 1
+
+for (i in seq_len(n_iterations)) {
+
+  # ----------------------------------------
+  # Step 1: Shared training/testing split
+  # ----------------------------------------
+
+  training_years <- sample(years, 10)
+  testing_years <- setdiff(years, training_years)
+
+  train_data <- df_test |>
+    filter(year %in% training_years)
+
+  test_data <- df_test |>
+    filter(year %in% testing_years)
+
+  # Actual mean annual total catch
+  actual_annual_totals <- test_data |>
+    group_by(year) |>
+    summarise(
+      total_catch = sum(catch),
+      .groups = "drop"
+    )
+
+  actual_mean <- mean(actual_annual_totals$total_catch)
+
+  # ----------------------------------------
+  # Step 2: Fit and evaluate each model
+  # ----------------------------------------
+
+  for (model_name in names(model_formulas)) {
+
+    model_formula <- model_formulas[[model_name]]
+
+    # Fit model using training years only
+    fitted_model <- lm(
+      model_formula,
+      data = train_data
+    )
+
+    # Predict log catch for the testing years
+    predicted_log_catch <- predict(
+      fitted_model,
+      newdata = test_data
+    )
+
+    # Training residuals only
+    training_residuals <- residuals(fitted_model)
+
+    # --------------------------------------
+    # Step 3: Simulate survey catches
+    # --------------------------------------
+
+    simulated_mean_totals <- numeric(n_simulations)
+
+    for (j in seq_len(n_simulations)) {
+
+      # Resample residuals on the log scale
+      simulated_residuals <- sample(
+        training_residuals,
+        size = nrow(test_data),
+        replace = TRUE
+      )
+
+      simulated_catch <- exp(
+        predicted_log_catch + simulated_residuals
+      )
+
+      simulated_data <- data.frame(
+        year = test_data$year,
+        catch = simulated_catch
+      )
+
+      # Total catch for each testing year
+      simulated_annual_totals <- simulated_data |>
+        group_by(year) |>
+        summarise(
+          total_catch = sum(catch),
+          .groups = "drop"
+        )
+
+      # Mean annual survey total
+      simulated_mean_totals[j] <- mean(
+        simulated_annual_totals$total_catch
+      )
+    }
+
+    # --------------------------------------
+    # Step 4: Calculate simulation interval
+    # --------------------------------------
+
+    lower_95 <- unname(quantile(
+      simulated_mean_totals, 0.025
+    ))
+
+    upper_95 <- unname(quantile(
+      simulated_mean_totals, 0.975
+    ))
+
+    predicted_mean <- mean(simulated_mean_totals)
+
+    # --------------------------------------
+    # Step 5: Evaluate performance
+    # --------------------------------------
+
+    results_list[[result_index]] <- data.frame(
+      iteration = i,
+      model = model_name,
+      predicted_mean = predicted_mean,
+      actual_mean = actual_mean,
+      lower_95 = lower_95,
+      upper_95 = upper_95,
+      covered = actual_mean >= lower_95 &&
+                actual_mean <= upper_95,
+      absolute_percentage_error =
+        abs(predicted_mean - actual_mean) /
+        actual_mean * 100,
+      interval_width = upper_95 - lower_95
+    )
+
+    result_index <- result_index + 1
+  }
+
+  if (i %% 10 == 0) {
+    cat("Completed iteration", i, "of", n_iterations, "\n")
+  }
+}
+
+# Combine results from both models
+results <- bind_rows(results_list)
+
+head(results)
+```
+
+```{r}
+
+# Combine results from both models
+results <- bind_rows(results_list)
+
+head(results)
+```
+
+Compare models
+```{r}
+model_comparison <- results |>
+  group_by(model) |>
+  summarise(
+    iterations = n(),
+
+    coverage_percent = mean(covered) * 100,
+
+    mean_absolute_percentage_error =
+      mean(absolute_percentage_error),
+
+    median_absolute_percentage_error =
+      median(absolute_percentage_error),
+
+    mean_interval_width =
+      mean(interval_width),
+
+    mean_relative_interval_width_percent =
+      mean(interval_width / actual_mean * 100),
+
+    .groups = "drop"
+  )
+
+print(model_comparison)
+```
+
+
+Plot models
+```{r}
+ggplot(results, aes(x = iteration)) +
+
+  geom_linerange(
+    aes(ymin = lower_95, ymax = upper_95),
+    colour = "steelblue",
+    linewidth = 0.5
+  ) +
+
+  geom_point(
+    aes(y = predicted_mean),
+    colour = "steelblue",
+    size = 1.3
+  ) +
+
+  geom_point(
+    aes(y = actual_mean),
+    colour = "red",
+    size = 1.3
+  ) +
+
+  facet_wrap(
+    ~ model,
+    ncol = 1,
+    labeller = as_labeller(c(
+      "Preliminary Model" = "Preliminary Model",
+      "Model 2" = "Simplified Model"
+    ))
+  ) +
+
+  labs(
+    title = "Regression Models: Simulated Mean Catch and 95% Intervals",
+    subtitle = "Blue = simulated mean; red = observed mean",
+    x = "Testing iteration",
+    y = "Mean annual total catch (kg)"
+  ) +
+
+  theme_minimal() +
+
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+
