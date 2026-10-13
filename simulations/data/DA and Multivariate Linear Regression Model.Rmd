@@ -635,10 +635,7 @@ result_index <- 1
 
 for (i in seq_len(n_iterations)) {
 
-  # ----------------------------------------
   # Step 1: Shared training/testing split
-  # ----------------------------------------
-
   training_years <- sample(years, 10)
   testing_years <- setdiff(years, training_years)
 
@@ -648,7 +645,7 @@ for (i in seq_len(n_iterations)) {
   test_data <- df_test |>
     filter(year %in% testing_years)
 
-  # Actual mean annual total catch
+  # Actual mean annual total catch (kg)
   actual_annual_totals <- test_data |>
     group_by(year) |>
     summarise(
@@ -658,21 +655,16 @@ for (i in seq_len(n_iterations)) {
 
   actual_mean <- mean(actual_annual_totals$total_catch)
 
-  # ----------------------------------------
   # Step 2: Fit and evaluate each model
-  # ----------------------------------------
-
   for (model_name in names(model_formulas)) {
 
     model_formula <- model_formulas[[model_name]]
 
-    # Fit model using training years only
     fitted_model <- lm(
       model_formula,
       data = train_data
     )
 
-    # Predict log catch for the testing years
     predicted_log_catch <- predict(
       fitted_model,
       newdata = test_data
@@ -681,10 +673,7 @@ for (i in seq_len(n_iterations)) {
     # Training residuals only
     training_residuals <- residuals(fitted_model)
 
-    # --------------------------------------
     # Step 3: Simulate survey catches
-    # --------------------------------------
-
     simulated_mean_totals <- numeric(n_simulations)
 
     for (j in seq_len(n_simulations)) {
@@ -705,7 +694,6 @@ for (i in seq_len(n_iterations)) {
         catch = simulated_catch
       )
 
-      # Total catch for each testing year
       simulated_annual_totals <- simulated_data |>
         group_by(year) |>
         summarise(
@@ -713,16 +701,12 @@ for (i in seq_len(n_iterations)) {
           .groups = "drop"
         )
 
-      # Mean annual survey total
       simulated_mean_totals[j] <- mean(
         simulated_annual_totals$total_catch
       )
     }
 
-    # --------------------------------------
     # Step 4: Calculate simulation interval
-    # --------------------------------------
-
     lower_95 <- unname(quantile(
       simulated_mean_totals, 0.025
     ))
@@ -733,10 +717,7 @@ for (i in seq_len(n_iterations)) {
 
     predicted_mean <- mean(simulated_mean_totals)
 
-    # --------------------------------------
     # Step 5: Evaluate performance
-    # --------------------------------------
-
     results_list[[result_index]] <- data.frame(
       iteration = i,
       model = model_name,
@@ -746,9 +727,10 @@ for (i in seq_len(n_iterations)) {
       upper_95 = upper_95,
       covered = actual_mean >= lower_95 &&
                 actual_mean <= upper_95,
-      absolute_percentage_error =
-        abs(predicted_mean - actual_mean) /
-        actual_mean * 100,
+
+      # Absolute error in kg
+      absolute_error = abs(predicted_mean - actual_mean),
+
       interval_width = upper_95 - lower_95
     )
 
@@ -760,19 +742,16 @@ for (i in seq_len(n_iterations)) {
   }
 }
 
-# Combine results from both models
-results <- bind_rows(results_list)
-
-head(results)
 ```
-
 ```{r}
 
 # Combine results from both models
 results <- bind_rows(results_list)
 
 head(results)
+
 ```
+
 
 Compare models
 ```{r}
@@ -783,17 +762,11 @@ model_comparison <- results |>
 
     coverage_percent = mean(covered) * 100,
 
-    mean_absolute_percentage_error =
-      mean(absolute_percentage_error),
+    mean_absolute_error = mean(absolute_error, na.rm = TRUE),
 
-    median_absolute_percentage_error =
-      median(absolute_percentage_error),
+    median_absolute_error = median(absolute_error, na.rm = TRUE),
 
-    mean_interval_width =
-      mean(interval_width),
-
-    mean_relative_interval_width_percent =
-      mean(interval_width / actual_mean * 100),
+    mean_interval_width = mean(interval_width, na.rm = TRUE),
 
     .groups = "drop"
   )

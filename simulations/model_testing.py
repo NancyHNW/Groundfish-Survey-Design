@@ -20,7 +20,7 @@ END_YEAR = 2022      # 20 years: 2002-2022 inclusive
 
 N_TRAIN = 10
 N_SIMULATIONS = 1000
-RANDOM_SEED = 818 #247012216 %566 %818
+RANDOM_SEED = 566 #247012216 %566 %818
 
 # ============================================================
 # LOAD DATA
@@ -719,3 +719,46 @@ print("=" * 80)
 print("HISTORICAL CATCH PERFORMANCE")
 print("=" * 80)
 print(summary.round(2))
+
+
+# find the average CI lower and upper bounds for each model
+average_ci = pd.DataFrame({
+    'Normal': [
+        normal_historical_results['ci_lower'].mean(),
+        normal_historical_results['ci_upper'].mean()
+    ],
+    'Gamma': [
+        gamma_historical_results['ci_lower'].mean(),
+        gamma_historical_results['ci_upper'].mean()
+    ],
+    'Lognormal': [
+        lognormal_historical_results['ci_lower'].mean(),
+        lognormal_historical_results['ci_upper'].mean()
+    ]
+}, index=['Average CI Lower', 'Average CI Upper'])
+
+print("\n")
+print("=" * 80)
+print("AVERAGE CI BOUNDS")
+print("=" * 80)
+print(average_ci.round(2))
+
+# Also find the 95% Ci for the total catch in the raw data, and also the mean per station CI in the raw data
+# First sum up each catch per year, then calculate the 95% CI for the total catch in the raw data
+
+total_catch_per_year = df.groupby('year')['catch'].sum()
+total_catch_per_year_df = total_catch_per_year.reset_index()
+total_catch_95_ci = total_catch_per_year_df['catch'].quantile([0.025, 0.975])
+mean_per_station_ci = df.groupby('station_id')['catch'].mean().quantile([0.025, 0.975])
+
+print("\n")
+print("=" * 80)
+print("95% CI FOR TOTAL CATCH IN RAW DATA")
+print("=" * 80)
+print(total_catch_95_ci.round(2))
+
+print("\n")
+print("=" * 80)
+print("MEAN PER STATION CI IN RAW DATA")
+print("=" * 80)
+print(mean_per_station_ci.round(2))

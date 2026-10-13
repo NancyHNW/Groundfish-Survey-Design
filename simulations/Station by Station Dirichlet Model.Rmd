@@ -82,6 +82,34 @@ df_truncated <- df %>%
   filter(year <= truncation_year)
 ```
 
+Summarise last 20 years of catch
+```{r}
+# Calculate annual catch across all stations
+annual_catch <- df %>%
+  group_by(year) %>%
+  summarise(
+    total_catch = sum(catch, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Select the last 20 years (2002–2021 inclusive)
+annual_catch_last20 <- annual_catch %>%
+  filter(year >= 2002, year <= 2021)
+
+# Calculate summary statistics
+historical_summary <- annual_catch_last20 %>%
+  summarise(
+    Min = min(total_catch, na.rm = TRUE),
+    Q1 = quantile(total_catch, 0.25, na.rm = TRUE),
+    Median = median(total_catch, na.rm = TRUE),
+    Mean = mean(total_catch, na.rm = TRUE),
+    Q3 = quantile(total_catch, 0.75, na.rm = TRUE),
+    Max = max(total_catch, na.rm = TRUE)
+  )
+
+print(historical_summary)
+```
+
 
 Station by year catch matrix
 ```{r}
@@ -384,14 +412,29 @@ for (station in station_list) {
     ) %>%
     arrange(year)
   
+  # Keep only years from the truncation year onwards
+  eligible_data <- station_data %>%
+    filter(year >= truncation_year)
+  
+  # Get available years
+  available_years <- sort(unique(eligible_data$year))
+  
+  # Randomly split years into training and testing halves
+  training_years <- sample(
+    available_years,
+    size = floor(length(available_years) / 2)
+  )
+  
+  testing_years <- setdiff(available_years, training_years)
+  
   # Historical data used to build the model
-  training_catch <- station_data %>%
-    filter(year <= truncation_year) %>%
+  training_catch <- eligible_data %>%
+    filter(year %in% training_years) %>%
     pull(catch)
   
   # Historical data used for validation
-  validation_data <- station_data %>%
-    filter(year > truncation_year)
+  validation_data <- eligible_data %>%
+    filter(year %in% testing_years)
   
   # Skip station if there is insufficient data
   if (length(training_catch) < 2 || nrow(validation_data) == 0) {
@@ -505,5 +548,12 @@ ggplot(
     y = "Number of stations"
   ) +
   theme_minimal()
+```
+
+Write file to csv
+```{r}
+# Write tibble to a CSV file
+library(readr)
+write_csv(station_summary, "stationbystation_station_summary.csv")
 ```
 
