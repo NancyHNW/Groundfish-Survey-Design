@@ -20,7 +20,7 @@ END_YEAR = 2022      # 20 years: 2002-2022 inclusive
 
 N_TRAIN = 10
 N_SIMULATIONS = 1000
-RANDOM_SEED = 566 #247012216 %566 %818
+RANDOM_SEED = 818 #247012216 %566 %818
 
 # ============================================================
 # LOAD DATA
@@ -242,28 +242,46 @@ lognormal_simulations = simulate_lognormal(
 )
 
 
+
 # ============================================================
 # CALCULATE PERFORMANCE
 # ============================================================
 
-def calculate_performance(simulations, actual_mean):
+def calculate_performance(simulations, actual_mean, test_year_totals):
 
+    # 95% simulation interval based on simulated total catches
     simulated_mean = np.mean(simulations)
-
     lower_ci = np.percentile(simulations, 2.5)
     upper_ci = np.percentile(simulations, 97.5)
 
-    inside_ci = (
+    # ----------------------------------------
+    # TEST 1: Compare average testing-year catch
+    # ----------------------------------------
+    mean_inside_ci = (
         lower_ci <= actual_mean <= upper_ci
     )
 
     error = simulated_mean - actual_mean
-
     absolute_error = abs(error)
-
     percentage_error = (
         absolute_error / actual_mean
-    ) * 100
+    ) * 100 if actual_mean != 0 else np.nan
+
+    # ----------------------------------------
+    # TEST 2: Check each testing year's catch
+    # ----------------------------------------
+    years_inside_ci = (
+        (test_year_totals >= lower_ci) &
+        (test_year_totals <= upper_ci)
+    )
+
+    n_years_tested = len(test_year_totals)
+    n_years_inside_ci = int(years_inside_ci.sum())
+
+    coverage_percentage = (
+        n_years_inside_ci / n_years_tested * 100
+        if n_years_tested > 0 else np.nan
+    )
 
     return {
         'Simulated Mean': simulated_mean,
@@ -273,43 +291,48 @@ def calculate_performance(simulations, actual_mean):
         'Error': error,
         'Absolute Error': absolute_error,
         'Percentage Error (%)': percentage_error,
-        'Actual Mean Inside CI': inside_ci
+        'Actual Mean Inside CI': mean_inside_ci,
+        'Years Tested': n_years_tested,
+        'Years Inside CI': n_years_inside_ci,
+        'Coverage (%)': coverage_percentage
     }
 
 
+# ============================================================
+# CALCULATE RESULTS FOR EACH MODEL
+# ============================================================
+
 normal_results = calculate_performance(
     normal_simulations,
-    actual_test_mean
+    actual_test_mean,
+    test_year_totals
 )
 
 gamma_results = calculate_performance(
     gamma_simulations,
-    actual_test_mean
+    actual_test_mean,
+    test_year_totals
 )
 
 lognormal_results = calculate_performance(
     lognormal_simulations,
-    actual_test_mean
+    actual_test_mean,
+    test_year_totals
 )
 
 
 # ============================================================
-# PRINT RESULTS
+# DISPLAY RESULTS
 # ============================================================
 
-results = pd.DataFrame({
+results_df = pd.DataFrame({
     'Normal': normal_results,
     'Gamma': gamma_results,
     'Lognormal': lognormal_results
 }).T
 
-print("=" * 80)
-print("MODEL PERFORMANCE")
-print("=" * 80)
-
-print(results.round(2))
-
-print()
+print("\nModel Performance Comparison:")
+print(results_df.round(2).to_string())
 
 
 # ============================================================
@@ -762,3 +785,240 @@ print("=" * 80)
 print("MEAN PER STATION CI IN RAW DATA")
 print("=" * 80)
 print(mean_per_station_ci.round(2))
+
+
+
+# ============================================================
+# ============================================================
+# RUNNING MULTIPLE ITERATIONS OF TRAINING AND TESTING
+# ============================================================
+# ============================================================
+
+N_REPETITIONS = 100
+N_SIMULATIONS = 100
+
+rng = np.random.default_rng(RANDOM_SEED)
+
+# Use the final 20 years: 2002–2022 inclusive
+df = df[
+    (df['year'] >= 2002) &
+    (df['year'] <= 2022)
+].copy()
+
+years = sorted(df['year'].dropna().unique())
+
+# Store results from every iteration and model
+all_results = []
+
+
+# ============================================================
+# REPEAT THE TRAINING / TESTING PROCESS 100 TIMES
+# ============================================================
+
+for iteration in range(1, N_REPETITIONS + 1):
+
+    # print(f"Running iteration {iteration}/{N_REPETITIONS}")
+
+    # --------------------------------------------------------
+    # 1. Randomly split into 10 training and 10 testing years
+    # --------------------------------------------------------
+
+    training_years = sorted(
+        rng.choice(years, size=10, replace=False)
+    )
+
+    testing_years = sorted(
+        year for year in years
+        if year not in training_years
+    )
+
+    train_df = df[
+        df['year'].isin(training_years)
+    ].copy()
+
+    test_df = df[
+        df['year'].isin(testing_years)
+    ].copy()
+
+    # Actual total catch for each testing year
+    test_year_totals = (
+        test_df.groupby('year')['catch']
+        .sum()
+        .reindex(testing_years)
+    )
+
+    # Mean total catch across the 10 testing years
+    actual_test_mean = test_year_totals.mean()
+
+    # --------------------------------------------------------
+    # 2. Fit all three distributions using training data only
+    # --------------------------------------------------------
+
+    normal_distributions = create_distributions(
+        train_df,
+        group_col='tow_station',
+        catch_col='catch'
+    )
+
+    gamma_distributions = create_gamma_distributions(
+        train_df,
+        group_col='tow_station',
+        catch_col='catch'
+    )
+
+    lognormal_distributions = create_lognormal_distributions(
+        train_df,
+        group_col='tow_station',
+        catch_col='catch'
+    )
+
+    station_ids = sorted(
+        train_df['tow_station'].dropna().unique()
+    )
+
+    # --------------------------------------------------------
+    # 3. Simulate total catch for each model
+    # --------------------------------------------------------
+
+    normal_simulations = simulate_normal(
+        normal_distributions,
+        station_ids,
+        N_SIMULATIONS,
+        rng
+    )
+
+    gamma_simulations = simulate_gamma(
+        gamma_distributions,
+        station_ids,
+        N_SIMULATIONS,
+        rng
+    )
+
+    lognormal_simulations = simulate_lognormal(
+        lognormal_distributions,
+        station_ids,
+        N_SIMULATIONS,
+        rng
+    )
+
+    simulations_by_model = {
+        'Normal': normal_simulations,
+        'Gamma': gamma_simulations,
+        'Lognormal': lognormal_simulations
+    }
+
+    # --------------------------------------------------------
+    # 4. Calculate performance for each model
+    # --------------------------------------------------------
+
+    for model_name, simulations in simulations_by_model.items():
+
+        simulated_mean = np.mean(simulations)
+
+        lower_ci = np.percentile(simulations, 2.5)
+        upper_ci = np.percentile(simulations, 97.5)
+
+        # Test A: Does the simulated interval contain
+        # the mean total catch of the testing years?
+        mean_inside_ci = (
+            lower_ci <= actual_test_mean <= upper_ci
+        )
+
+        error = simulated_mean - actual_test_mean
+
+        absolute_error = abs(error)
+
+        percentage_error = (
+            absolute_error / actual_test_mean * 100
+            if actual_test_mean != 0 else np.nan
+        )
+
+        # Test B: Does the interval contain each individual
+        # testing year's total catch?
+        years_inside_ci = (
+            (test_year_totals >= lower_ci) &
+            (test_year_totals <= upper_ci)
+        )
+
+        n_years_tested = len(test_year_totals)
+        n_years_inside_ci = int(years_inside_ci.sum())
+
+        coverage_percentage = (
+            n_years_inside_ci / n_years_tested * 100
+            if n_years_tested > 0 else np.nan
+        )
+
+        all_results.append({
+            'Iteration': iteration,
+            'Model': model_name,
+            'Training Years': ', '.join(
+                map(str, training_years)
+            ),
+            'Testing Years': ', '.join(
+                map(str, testing_years)
+            ),
+            'Simulated Mean': simulated_mean,
+            '95% CI Lower': lower_ci,
+            '95% CI Upper': upper_ci,
+            'Actual Test Mean': actual_test_mean,
+            'Absolute Error': absolute_error,
+            'Percentage Error (%)': percentage_error,
+            'Mean Inside CI': mean_inside_ci,
+            'Years Tested': n_years_tested,
+            'Years Inside CI': n_years_inside_ci,
+            'Coverage (%)': coverage_percentage
+        })
+
+
+# ============================================================
+# 5. SAVE ALL 300 MODEL-ITERATION RESULTS
+# ============================================================
+
+results_df = pd.DataFrame(all_results)
+
+results_df.to_csv(
+    'total_catch_testing_results.csv',
+    index=False
+)
+
+print("\nAll iteration results:")
+print(results_df.head(9).round(2).to_string(index=False))
+
+
+# ============================================================
+# 6. SUMMARISE PERFORMANCE ACROSS 100 ITERATIONS
+# ============================================================
+
+summary_df = (
+    results_df.groupby('Model')
+    .agg(
+        Mean_Absolute_Error=('Absolute Error', 'mean'),
+        Mean_Percentage_Error=('Percentage Error (%)', 'mean'),
+        Mean_Coverage=('Coverage (%)', 'mean'),
+        Mean_Years_Inside_CI=('Years Inside CI', 'mean'),
+        Mean_Testing_Years=('Years Tested', 'mean'),
+        Mean_Inside_CI_Rate=('Mean Inside CI', 'mean')
+    )
+    .reset_index()
+)
+
+# Convert the proportion of iterations where the test
+# mean fell inside the interval into a percentage.
+summary_df['Mean_Inside_CI_Rate'] *= 100
+
+summary_df = summary_df.rename(columns={
+    'Mean_Absolute_Error': 'Mean Absolute Error (kg)',
+    'Mean_Percentage_Error': 'Mean Percentage Error (%)',
+    'Mean_Coverage': 'Average Year Coverage (%)',
+    'Mean_Years_Inside_CI': 'Average Years Inside CI',
+    'Mean_Testing_Years': 'Testing Years per Iteration',
+    'Mean_Inside_CI_Rate': 'Mean Inside CI Rate (%)'
+})
+
+print("\nPerformance summary across 100 iterations:")
+print(summary_df.round(2).to_string(index=False))
+
+summary_df.to_csv(
+    'total_catch_testing_summary.csv',
+    index=False
+)

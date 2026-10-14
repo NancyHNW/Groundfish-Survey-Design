@@ -13,7 +13,12 @@ install.packages("corrplot")
 
 ```{r}
 library(readxl)
+library(ggplot2)
+library(dplyr)
 library(corrplot)
+library(purrr)
+
+set.seed(566)
 ```
 
 ```{r}
@@ -32,8 +37,8 @@ df <- read_excel("spring_historical_english.xlsx")
 ```
 
 ```{r}
-str(df)
-summary(df)
+# str(df)
+# summary(df)
 ```
 Look at how many unique variables there are
 ```{r}
@@ -559,7 +564,361 @@ plot(model_2)
 drop1(model_2, test = "F")
 ```
 
-## TESTING
+## TESTING STATION CATCH
+1. Extract 2002-2022, divide into 10 years training/testing, repeat this process 100 times. 
+2. Fit the regression model.
+3. Predict station-level catch. Predict log_catch for each station in the held-out years, then transform predictions back to kilograms.
+4. Compare predictions with observations. Calculate MAE, RMSE and MAPE across the testing stations, and summarise performance across the 100 repetitions.
+
+```{r}
+# --------------------------------------------------
+# 1. Settings
+# --------------------------------------------------
+
+n_iterations <- 100
+n_train_years <- 10
+n_test_years <- 10
+
+years <- 2002:2022
+
+categorical_vars <- c(
+  "ship_number", "weather", "cloud",
+  "sea_state", "quadrant"
+)
+
+# --------------------------------------------------
+# 2. Prepare data
+# --------------------------------------------------
+
+df <- df %>%
+  mutate(
+    year = as.numeric(year),
+    tow_station = as.character(tow_station),
+    catch = as.numeric(catch),
+    log_catch = ifelse(catch > 0, log(catch), NA_real_)
+  )
+
+# Convert categorical predictors to factors
+for (v in categorical_vars) {
+  if (v %in% names(df)) {
+    df[[v]] <- as.factor(df[[v]])
+  }
+}
+
+# --------------------------------------------------
+# 3. Define regression models
+# --------------------------------------------------
+
+preliminary_formula <- log_catch ~
+  year +
+  cast_latitude + cast_longitude +
+  haul_latitude + haul_longitude +
+  depth_cast + depth_haul +
+  ship_number +
+  wind_speed + wind_direction +
+  weather + cloud + sea_state +
+  bottom_temp + air_temp + barometer +
+  trawl_speed + trawl_length +
+  trawl_bearing + trawl_time +
+  quadrant
+
+simplified_formula <- log_catch ~
+  year +
+  haul_latitude + haul_longitude +
+  depth_haul +
+  ship_number +
+  bottom_temp + air_temp + barometer +
+  trawl_length + trawl_bearing
+
+model_formulas <- list(
+  "Preliminary" = preliminary_formula,
+  "Simplified" = simplified_formula
+)
+
+# --------------------------------------------------
+# 4. Function to fit a model and predict catches
+#    with 95% prediction intervals
+# --------------------------------------------------
+
+fit_and_predict <- function(formula, train_data, test_data) {
+
+  # Remove unused factor levels from training data
+  train_data <- droplevels(train_data)
+
+  # Match test factor levels to the training data.
+  # Unseen levels become NA and will not be evaluated.
+  for (v in categorical_vars) {
+    if (v %in% all.vars(formula)) {
+      if (v %in% names(train_data) &&
+          is.factor(train_data[[v]])) {
+
+        test_data[[v]] <- factor(
+          test_data[[v]],
+          levels = levels(train_data[[v]])
+        )
+      }
+    }
+  }
+
+  # Fit the regression model
+  fit <- lm(
+    formula,
+    data = train_data,
+    na.action = na.exclude
+  )
+
+  # Duan smearing correction for log-transformed catch
+  smearing_factor <- mean(
+    exp(residuals(fit)),
+    na.rm = TRUE
+  )
+
+  # Predict on the log-catch scale, including
+  # 95% prediction intervals
+  pred <- predict(
+    fit,
+    newdata = test_data,
+    interval = "prediction",
+    level = 0.95
+  )
+
+  # Transform predictions and interval bounds
+  # back to the original catch scale
+  data.frame(
+    actual = test_data$catch,
+    predicted = exp(pred[, "fit"]) * smearing_factor,
+    lower = exp(pred[, "lwr"]) * smearing_factor,
+    upper = exp(pred[, "upr"]) * smearing_factor
+  )
+}
+
+# --------------------------------------------------
+# 5. Function to calculate performance metrics
+# --------------------------------------------------
+
+calculate_metrics <- function(predictions) {
+
+  actual <- predictions$actual
+  predicted <- predictions$predicted
+  lower <- predictions$lower
+  upper <- predictions$upper
+
+  # Observations with valid point predictions
+  valid <- is.finite(actual) &
+    is.finite(predicted) &
+    is.finite(lower) &
+    is.finite(upper)
+
+  actual <- actual[valid]
+  predicted <- predicted[valid]
+  lower <- lower[valid]
+  upper <- upper[valid]
+
+  if (length(actual) == 0) {
+    return(data.frame(
+      n_evaluated = 0,
+      MAE = NA_real_,
+      RMSE = NA_real_,
+      MAPE = NA_real_,
+      Mean_Bias = NA_real_,
+      R_squared = NA_real_,
+      Coverage = NA_real_,
+      Mean_Interval_Width = NA_real_
+    ))
+  }
+
+  errors <- predicted - actual
+
+  # MAPE is calculated only where actual catch > 0
+  positive_actual <- actual > 0
+
+  MAPE <- if (any(positive_actual)) {
+    mean(
+      abs(errors[positive_actual] /
+            actual[positive_actual])
+    ) * 100
+  } else {
+    NA_real_
+  }
+
+  # R-squared on the original catch scale
+  R_squared <- if (
+    length(actual) > 1 &&
+    sum((actual - mean(actual))^2) > 0
+  ) {
+    1 - sum(errors^2) /
+      sum((actual - mean(actual))^2)
+  } else {
+    NA_real_
+  }
+
+  # Percentage of actual catches within the
+  # 95% prediction intervals
+  coverage <- mean(
+    actual >= lower & actual <= upper
+  ) * 100
+
+  # Average width of the prediction intervals
+  interval_width <- mean(upper - lower)
+
+  data.frame(
+    n_evaluated = length(actual),
+    MAE = mean(abs(errors)),
+    RMSE = sqrt(mean(errors^2)),
+    MAPE = MAPE,
+    Mean_Bias = mean(errors),
+    R_squared = R_squared,
+    Coverage = coverage,
+    Mean_Interval_Width = interval_width
+  )
+}
+
+# --------------------------------------------------
+# 6. Run repeated train-test validation
+# --------------------------------------------------
+
+regression_results <- list()
+
+for (i in seq_len(n_iterations)) {
+
+  # Randomly select 10 training years and 10
+  # testing years; one year remains unused
+  train_years <- sample(years, n_train_years)
+  test_years <- sample(
+    setdiff(years, train_years),
+    n_test_years
+  )
+
+  train_data <- df %>%
+    filter(year %in% train_years)
+
+  test_data <- df %>%
+    filter(year %in% test_years)
+
+  # Store predictions from both models
+  iteration_predictions <- list()
+
+  for (model_name in names(model_formulas)) {
+
+    iteration_predictions[[model_name]] <-
+      tryCatch(
+        fit_and_predict(
+          formula = model_formulas[[model_name]],
+          train_data = train_data,
+          test_data = test_data
+        ),
+        error = function(e) NULL
+      )
+  }
+
+  # Ensure both models are compared on exactly
+  # the same test observations
+  if (
+    is.null(iteration_predictions[["Preliminary"]]) ||
+    is.null(iteration_predictions[["Simplified"]])
+  ) {
+    next
+  }
+
+  preliminary_predictions <-
+    iteration_predictions[["Preliminary"]]
+
+  simplified_predictions <-
+    iteration_predictions[["Simplified"]]
+
+  common_valid <- with(
+    preliminary_predictions,
+    is.finite(actual) &
+      is.finite(predicted) &
+      is.finite(lower) &
+      is.finite(upper)
+  ) & with(
+    simplified_predictions,
+    is.finite(actual) &
+      is.finite(predicted) &
+      is.finite(lower) &
+      is.finite(upper)
+  )
+
+  # Apply the same observations to both models
+  preliminary_predictions <-
+    preliminary_predictions[common_valid, ]
+
+  simplified_predictions <-
+    simplified_predictions[common_valid, ]
+
+  for (model_name in names(model_formulas)) {
+
+    predictions <- iteration_predictions[[model_name]]
+
+    if (model_name == "Preliminary") {
+      predictions <- preliminary_predictions
+    } else {
+      predictions <- simplified_predictions
+    }
+
+    metrics <- calculate_metrics(predictions)
+
+    metrics$model <- model_name
+    metrics$iteration <- i
+
+    regression_results[[length(regression_results) + 1]] <-
+      metrics
+  }
+}
+
+# --------------------------------------------------
+# 7. Combine results and summarise performance
+# --------------------------------------------------
+
+regression_results_df <- bind_rows(regression_results)
+
+regression_summary <- regression_results_df %>%
+  group_by(model) %>%
+  summarise(
+    Successful_Iterations = n(),
+
+    Mean_Observations = mean(
+      n_evaluated, na.rm = TRUE
+    ),
+
+    Mean_MAE = mean(MAE, na.rm = TRUE),
+    SD_MAE = sd(MAE, na.rm = TRUE),
+
+    Mean_RMSE = mean(RMSE, na.rm = TRUE),
+    SD_RMSE = sd(RMSE, na.rm = TRUE),
+
+    Mean_MAPE = mean(MAPE, na.rm = TRUE),
+    SD_MAPE = sd(MAPE, na.rm = TRUE),
+
+    Mean_Bias = mean(Mean_Bias, na.rm = TRUE),
+
+    Mean_R_squared = mean(
+      R_squared, na.rm = TRUE
+    ),
+
+    Mean_Coverage = mean(
+      Coverage, na.rm = TRUE
+    ),
+
+    SD_Coverage = sd(
+      Coverage, na.rm = TRUE
+    ),
+
+    Mean_Interval_Width = mean(
+      Mean_Interval_Width, na.rm = TRUE
+    ),
+
+    .groups = "drop"
+  )
+
+print(regression_summary)
+
+```
+
+
+
+## TESTING TOTAL CATCH
 Test model 2 and model 1
 1. Extract 2002-2022, divide into 10 years training/testing
 2. Fit regression model
@@ -567,14 +926,8 @@ Test model 2 and model 1
 4. Generate 1000 surveys
 5. Repeat 100 times
 
-```{r}
-library(ggplot2)
-```
-
 Set up both models
 ```{r}
-library(dplyr)
-
 df <- read_excel("spring_historical_english.xlsx")
 
 # Create log catch
@@ -625,122 +978,121 @@ df_test <- df_test |>
 
 Run both models on same tests
 ```{r}
-set.seed(566)
 
-n_iterations <- 100
-n_simulations <- 1000
-
-results_list <- vector("list", n_iterations * 2)
-result_index <- 1
-
-for (i in seq_len(n_iterations)) {
-
-  # Step 1: Shared training/testing split
-  training_years <- sample(years, 10)
-  testing_years <- setdiff(years, training_years)
-
-  train_data <- df_test |>
-    filter(year %in% training_years)
-
-  test_data <- df_test |>
-    filter(year %in% testing_years)
-
-  # Actual mean annual total catch (kg)
-  actual_annual_totals <- test_data |>
-    group_by(year) |>
-    summarise(
-      total_catch = sum(catch),
-      .groups = "drop"
-    )
-
-  actual_mean <- mean(actual_annual_totals$total_catch)
-
-  # Step 2: Fit and evaluate each model
-  for (model_name in names(model_formulas)) {
-
-    model_formula <- model_formulas[[model_name]]
-
-    fitted_model <- lm(
-      model_formula,
-      data = train_data
-    )
-
-    predicted_log_catch <- predict(
-      fitted_model,
-      newdata = test_data
-    )
-
-    # Training residuals only
-    training_residuals <- residuals(fitted_model)
-
-    # Step 3: Simulate survey catches
-    simulated_mean_totals <- numeric(n_simulations)
-
-    for (j in seq_len(n_simulations)) {
-
-      # Resample residuals on the log scale
-      simulated_residuals <- sample(
-        training_residuals,
-        size = nrow(test_data),
-        replace = TRUE
-      )
-
-      simulated_catch <- exp(
-        predicted_log_catch + simulated_residuals
-      )
-
-      simulated_data <- data.frame(
-        year = test_data$year,
-        catch = simulated_catch
-      )
-
-      simulated_annual_totals <- simulated_data |>
-        group_by(year) |>
-        summarise(
-          total_catch = sum(catch),
-          .groups = "drop"
-        )
-
-      simulated_mean_totals[j] <- mean(
-        simulated_annual_totals$total_catch
-      )
-    }
-
-    # Step 4: Calculate simulation interval
-    lower_95 <- unname(quantile(
-      simulated_mean_totals, 0.025
-    ))
-
-    upper_95 <- unname(quantile(
-      simulated_mean_totals, 0.975
-    ))
-
-    predicted_mean <- mean(simulated_mean_totals)
-
-    # Step 5: Evaluate performance
-    results_list[[result_index]] <- data.frame(
-      iteration = i,
-      model = model_name,
-      predicted_mean = predicted_mean,
-      actual_mean = actual_mean,
-      lower_95 = lower_95,
-      upper_95 = upper_95,
-      covered = actual_mean >= lower_95 &&
-                actual_mean <= upper_95,
-
-      # Absolute error in kg
-      absolute_error = abs(predicted_mean - actual_mean),
-
-      interval_width = upper_95 - lower_95
-    )
-
-    result_index <- result_index + 1
-  }
-
-  if (i %% 10 == 0) {
-    cat("Completed iteration", i, "of", n_iterations, "\n")
-  }
-}
+# n_iterations <- 100
+# n_simulations <- 1000
+# 
+# results_list <- vector("list", n_iterations * 2)
+# result_index <- 1
+# 
+# for (i in seq_len(n_iterations)) {
+# 
+#   # Step 1: Shared training/testing split
+#   training_years <- sample(years, 10)
+#   testing_years <- setdiff(years, training_years)
+# 
+#   train_data <- df_test |>
+#     filter(year %in% training_years)
+# 
+#   test_data <- df_test |>
+#     filter(year %in% testing_years)
+# 
+#   # Actual mean annual total catch (kg)
+#   actual_annual_totals <- test_data |>
+#     group_by(year) |>
+#     summarise(
+#       total_catch = sum(catch),
+#       .groups = "drop"
+#     )
+# 
+#   actual_mean <- mean(actual_annual_totals$total_catch)
+# 
+#   # Step 2: Fit and evaluate each model
+#   for (model_name in names(model_formulas)) {
+# 
+#     model_formula <- model_formulas[[model_name]]
+# 
+#     fitted_model <- lm(
+#       model_formula,
+#       data = train_data
+#     )
+# 
+#     predicted_log_catch <- predict(
+#       fitted_model,
+#       newdata = test_data
+#     )
+# 
+#     # Training residuals only
+#     training_residuals <- residuals(fitted_model)
+# 
+#     # Step 3: Simulate survey catches
+#     simulated_mean_totals <- numeric(n_simulations)
+# 
+#     for (j in seq_len(n_simulations)) {
+# 
+#       # Resample residuals on the log scale
+#       simulated_residuals <- sample(
+#         training_residuals,
+#         size = nrow(test_data),
+#         replace = TRUE
+#       )
+# 
+#       simulated_catch <- exp(
+#         predicted_log_catch + simulated_residuals
+#       )
+# 
+#       simulated_data <- data.frame(
+#         year = test_data$year,
+#         catch = simulated_catch
+#       )
+# 
+#       simulated_annual_totals <- simulated_data |>
+#         group_by(year) |>
+#         summarise(
+#           total_catch = sum(catch),
+#           .groups = "drop"
+#         )
+# 
+#       simulated_mean_totals[j] <- mean(
+#         simulated_annual_totals$total_catch
+#       )
+#     }
+# 
+#     # Step 4: Calculate simulation interval
+#     lower_95 <- unname(quantile(
+#       simulated_mean_totals, 0.025
+#     ))
+# 
+#     upper_95 <- unname(quantile(
+#       simulated_mean_totals, 0.975
+#     ))
+# 
+#     predicted_mean <- mean(simulated_mean_totals)
+# 
+#     # Step 5: Evaluate performance
+#     results_list[[result_index]] <- data.frame(
+#       iteration = i,
+#       model = model_name,
+#       predicted_mean = predicted_mean,
+#       actual_mean = actual_mean,
+#       lower_95 = lower_95,
+#       upper_95 = upper_95,
+#       covered = actual_mean >= lower_95 &&
+#                 actual_mean <= upper_95,
+# 
+#       # Absolute error in kg
+#       absolute_error = abs(predicted_mean - actual_mean),
+# 
+#       interval_width = upper_95 - lower_95
+#     )
+# 
+#     result_index <- result_index + 1
+#   }
+# 
+#   if (i %% 10 == 0) {
+#     cat("Completed iteration", i, "of", n_iterations, "\n")
+#   }
+# }
 
 ```
 ```{r}

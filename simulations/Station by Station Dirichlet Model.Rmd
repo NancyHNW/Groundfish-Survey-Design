@@ -109,6 +109,42 @@ historical_summary <- annual_catch_last20 %>%
 
 print(historical_summary)
 ```
+Summarise station by station summary
+```{r}
+# Summarise historical catch for each station (2002–2021)
+station_catch_summary <- df %>%
+  group_by(tow_station) %>%
+  summarise(
+    Min = min(catch, na.rm = TRUE),
+    Q1 = quantile(catch, 0.25, na.rm = TRUE),
+    Median = median(catch, na.rm = TRUE),
+    Mean = mean(catch, na.rm = TRUE),
+    Q3 = quantile(catch, 0.75, na.rm = TRUE),
+    Max = max(catch, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(tow_station)
+
+print(station_catch_summary)
+
+# Summarise across the 20 years for all stations
+historical_station_summary <- df %>%
+  group_by(tow_station) %>%
+  summarise(
+    Mean = mean(catch, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  summarise(
+    Min = min(Mean, na.rm = TRUE),
+    Q1 = quantile(Mean, 0.25, na.rm = TRUE),
+    Median = median(Mean, na.rm = TRUE),
+    Mean = mean(Mean, na.rm = TRUE),
+    Q3 = quantile(Mean, 0.75, na.rm = TRUE),
+    Max = max(Mean, na.rm = TRUE)
+  )
+
+print(historical_station_summary)
+```
 
 
 Station by year catch matrix
@@ -455,6 +491,8 @@ for (station in station_list) {
   simulated_catches <- as.vector(
     proportions %*% training_catch
   )
+  # Point prediction: mean of simulated catches
+  predicted_catch <- mean(simulated_catches)
   
   # 95% simulation interval
   lower_95 <- quantile(simulated_catches, 0.025)
@@ -488,6 +526,8 @@ for (station in station_list) {
     repetition = 1:n_repetitions,
     year = selected_years,
     historical_catch = historical_values,
+    predicted_catch = predicted_catch,
+    absolute_error = abs(historical_values - predicted_catch),
     lower_95 = lower_95,
     upper_95 = upper_95,
     inside_interval = inside
@@ -508,28 +548,17 @@ station_summary <- validation_results %>%
     total = n(),
     percentage_inside = mean(inside_interval) * 100,
     percentage_outside = mean(!inside_interval) * 100,
+    MAE = mean(absolute_error, na.rm = TRUE),
     .groups = "drop"
   )
 
 station_summary
 ```
 ```{r}
-station_summary <- validation_results %>%
-  group_by(tow_station) %>%
-  summarise(
-    inside = sum(inside_interval),
-    outside = sum(!inside_interval),
-    total = n(),
-    percentage_inside = mean(inside_interval) * 100,
-    percentage_outside = mean(!inside_interval) * 100,
-    .groups = "drop"
-  )
-
-station_summary
-
 # Summary statistics across stations
 summary(station_summary$percentage_inside)
 summary(station_summary$percentage_outside)
+summary(station_summary$MAE)
 ```
 
 
@@ -553,7 +582,7 @@ ggplot(
 Write file to csv
 ```{r}
 # Write tibble to a CSV file
-library(readr)
-write_csv(station_summary, "stationbystation_station_summary.csv")
+# library(readr)
+# write_csv(station_summary, "stationbystation_station_summary.csv")
 ```
 
