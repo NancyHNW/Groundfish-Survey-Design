@@ -22,10 +22,13 @@ Every module supports `--help`.
 |---|---|---|---|
 | `buffers` | Does planning below full capacity pay for itself? | `capacity_buffer` | yes |
 | `monte_carlo` | Which solver gives the most robust routes? | `method` | yes |
+| `overflow_map` | Where do overflows occur and what do they cost? | spatial overflow profile | optionally, unless a saved plan is supplied |
 | `strategies` | What should a boat do when the hold fills? | overflow response | **no** |
 | `realisation` | What does one season actually look like? | nothing — single draw | yes |
+| `variance` | How much variation comes from the planner rather than the catch? | solver seeds | yes |
 | `paired` | Is a difference real, or is it solver noise? | any of the above | as needed |
 | `full_sweep` | Buffer crossed with overflow response, on the full problem | both | one per buffer |
+| `combine_blocks` | Re-reference already-saved paired block tables | none | no |
 
 `paired` is the one to reach for when a single solve cannot settle the
 question. Restart noise on the full problem spans tens of hours, wider than
@@ -46,7 +49,31 @@ realised time falls by more than planned time rose. Extra flag: `--buffers 0.7
 ### `monte_carlo`
 Solves with each method, scores against shared scenarios. A solver that wins on
 deterministic time need not win once catch is uncertain. Extra flags:
-`--methods grasp_only grasp_swap tabu_move`, `--no-histograms`.
+`--methods grasp_only grasp_swap tabu_move`, `--all-methods` (all six planners),
+`--baseline`, `--no-histograms`.
+
+```bash
+python -m experiments.monte_carlo --all-methods --full --time-limit 300 \
+    --n-scenarios 1000 --strategy forward --no-histograms
+```
+
+Every row comes from its **own solve**, which is the one thing that separates
+this from `strategies`. Two consequences:
+
+- `solve s` is wall clock, and only this table has it. `--time-limit` caps the
+  restart loop, so a method finishing well under the cap ran out of moves rather
+  than being cut off — a result about the method, not about the budget.
+- `+/-95%` is scenario sampling only, so it says nothing about the solver noise
+  that separates two different solves. The **paired-across-scenarios** table
+  underneath is what prices a method against the baseline: a heavy catch draw
+  slows every plan, and subtracting cancels that shared bad luck. What survives
+  is the gap between the plans. Check `variance` first for whether solver
+  restart noise is large enough to matter at the budget being used — on these
+  budgets it is not.
+
+Beside the mean, every headline number carries an interval: `exc lo`/`exc hi`
+(Wilson, because P(exceed) saturates near 1.0 and the textbook interval reaches
+past it), `+/-ret`, and `penalty +/-pen`.
 
 ### `strategies`
 Main table over eight rows — `backtrack`, `forward`, `preemptive_0.8`,
@@ -94,6 +121,12 @@ separate — a setting can separate from the baseline by being worse.
 
 Settings that differ only in scoring share one solve, so eight strategies
 over 30 instances costs 30 solves, not 240.
+
+`--compare method` runs all six planners, but **only on the test instances**.
+The full problem is a single instance, which leaves the solver seed as the only
+block axis, and `variance` shows that axis is degenerate at these budgets — so
+pairing there has nothing to pair on. For the method question on the full
+problem use `monte_carlo`, which pairs across scenarios instead.
 
 ### `realisation`
 Draws a single catch scenario and plots the planned route beside the route
@@ -151,6 +184,11 @@ specifically want to study that mismatch.
 | `print_table(rows, columns, title)` | Fixed-width table |
 | `base_parser()` | The shared flags above |
 
+`CORE_COLUMNS` is in every table. `INTERVAL_COLUMNS` is opt-in — an interval on
+`P(exceed)`, `E[ret]` and `penalty`, which roughly doubles the table width and
+is only worth it where the numbers are going into the report. `REPAIR_COLUMNS`
+is identically zero under every strategy but `repair`.
+
 `sweep_solve` and `sweep_eval` are **generators**, not table builders. They
 yield the raw solve result alongside the row so each experiment can add its own
 per-iteration output — `monte_carlo` draws a histogram, `buffers` prints a
@@ -170,6 +208,11 @@ one-line summary — without the shared code needing to know about it.
 | `mean time` | Mean realised time across scenarios |
 | `+/-95%` | Monte Carlo 95% interval on that mean. Scenario sampling only — it says nothing about solver restart noise, which is the larger term whenever two rows come from different solves. |
 | `p95 time` | 95th percentile — the bad-but-not-freak season |
+| `exc lo`, `exc hi` | 95% **Wilson** interval on `P(exceed)`. Asymmetric on purpose: the proportion sits at 98–99% on the full problem, where the normal approximation both reaches past 1.0 and collapses to zero width once every scenario overflows. |
+| `+/-ret` | 95% interval on `E[ret]` |
+| `penalty` | Mean realised minus planned — what uncertainty cost this plan. `mean time − planned` by construction, reported directly so it gets its own interval. |
+| `+/-pen` | 95% interval on `penalty` |
+| `solve s` | Wall-clock seconds the solver used. `monte_carlo` only, where the method is what is being swept. |
 | `E[rep]` | Mean re-plans per season. Zero for every strategy but `repair`. |
 | `cap hit` | Fraction of scenarios that hit `max_repairs` and finished on backtrack detours instead. Anything above zero means those rows are not pure repair. |
 | `vs …` | That row's `mean` minus the reference row's `mean`. Positive = worse. The reference row is 0.0 by construction. |

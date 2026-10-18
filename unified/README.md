@@ -22,7 +22,7 @@ python -m experiments.monte_carlo --ns 20 --nv 2 --cf 62.5 --time-limit 10
 
 `unified.solve` runs one configuration and returns one solution. Anything that
 sweeps a parameter, scores against catch scenarios or produces a table lives in
-`experiments/` — see `documentation/experiments-README.md`.
+`experiments/` — see [`experiments/README.md`](../experiments/README.md).
 
 ---
 
@@ -205,7 +205,7 @@ with heuristic_context():
 
 ## Notes
 
-- **Distance vs Time**: heuristic solvers optimise travel *time* (`true_time.npy`); Kun Er's MIPs optimise *distance* (`true_dist.npy`). Objectives from different solvers are not directly comparable.
+- **Distance vs Time**: heuristic solvers optimise travel *time* (`final_code/local data/true_time.npy`); Kun Er's MIPs optimise *distance* (`gfsp_code/data/true_dist.npy`). Objectives from different solvers are not directly comparable.
 - **The objective is summed vessel-hours, not calendar time.** Two boats working 150 h each gives 300, not 150. It is not a makespan.
 - **Catch data**: `catch_source="gfsp"` for gfsp test problems (capacities were designed around `LimitedCatch.csv`), `"heuristic"` (default) for the heuristic code's own problems, `"historical"` for station means fitted from the survey record. The stochastic evaluator always draws scenarios from the historical distributions, so planning against `gfsp` is a systematic bias rather than just extra noise.
 - **Gurobi license**: The TSP improvement step and MIP formulations require a Gurobi license.
