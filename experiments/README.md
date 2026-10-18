@@ -12,7 +12,13 @@ python -m experiments.realisation  --ns 20  --nv 2 --cf 62.5 --seed 7
 python -m experiments.paired       --compare strategy --instances 1-30
 ```
 
-Every module supports `--help`.
+Every experiment runner supports `--help`. `combine_blocks` instead takes a
+glob pattern for saved block CSVs and an optional baseline label:
+
+```bash
+python -m experiments.combine_blocks \
+    "tests/outputs/paired_buffer-tabu_move_full_s*_blocks.csv"
+```
 
 ---
 

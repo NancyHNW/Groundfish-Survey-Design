@@ -1,15 +1,7 @@
-"""Tests on the real 581-station survey, not a scaled-down proxy.
+"""Tests for the real 581-station survey problem.
 
-The gfsp subproblems need a catch adjustment at ns == 10 to be solvable at
-all, and their capacities are scaled by a factor while the catches are not.
-The full problem has neither issue: the largest single station is 7,908 kg
-against a smallest hold of 14,000 kg, so greedy construction finishes with a
-zero penalty on the first attempt.
-
-Solving is cheap. The whole file runs in a few seconds, and does so only
-because the catch fit is cached -- an uncached fit costs 138 s on its own.
-
-Marked `full` so the everyday run stays fast:
+The module is marked ``full`` because it loads the historical catch fit.
+Run it with:
 
     python -m pytest tests/test_full_problem.py -v -m full
 """
@@ -42,11 +34,7 @@ def _node_to_station(node):
 
 @pytest.fixture(scope="module")
 def solved():
-    """Solve the full problem once and share it across the file.
-
-    Greedy rather than GRASP on purpose: GRASP never checks whether a station
-    fits before adding it, so it cannot show that a feasible solution exists.
-    """
+    """Solve the full problem once and share the result across tests."""
     inst = load_gfsp_full_problem()
 
     with heuristic_context():
@@ -88,19 +76,9 @@ def scenarios():
     sim = CatchSimulator(seed=123)
     sim.fit()
     return sim.sample(n_scenarios=30)
-
-
-# ---------------------------------------------------------------------------
 # Construction
-# ---------------------------------------------------------------------------
-
 def test_greedy_terminates_and_is_feasible(solved):
-    """The whole point: the full problem has a feasible solution.
-
-    Greedy only crosses a station off when it manages to add one, so a station
-    that fits in no boat leaves it sailing to port and back forever. Reaching
-    this assertion at all proves that did not happen.
-    """
+    """Check that greedy construction finds a feasible full-problem route."""
     assert solved["penalty_raw"] == 0.0, (
         f"greedy produced an infeasible solution, penalty "
         f"{solved['penalty_raw']:.1f}"
@@ -129,27 +107,12 @@ def test_every_station_visited_exactly_once(solved):
 
 
 def test_no_boat_is_left_idle(solved):
-    """Every boat does some work.
-
-    Total time is summed across boats, so a solution that idles one scores a
-    *lower* objective while being worse. Greedy nearest-boat selection once
-    left a boat with 0 stations and another with 652 for exactly this reason.
-    """
+    """Check that every boat receives work."""
     per_boat = [b["n_stations"] for b in solved["boats_summary"]]
     assert all(n > 0 for n in per_boat), f"a boat got no stations: {per_boat}"
-
-
-# ---------------------------------------------------------------------------
 # Route constraints
-# ---------------------------------------------------------------------------
-
 def test_every_boat_starts_and_ends_at_its_home_port(solved):
-    """Closes a long-standing gap: this was enforced but never asserted.
-
-    The penalty term that would catch a violation only fires when
-    check_stations=True, which no caller passes, so the constraint rests
-    entirely on the construction heuristics appending a return leg.
-    """
+    """Check that every boat starts and ends at its home port."""
     for home, route in zip(solved["home_ports"], solved["routes"]):
         assert route, "boat has no route at all"
         assert route[0][0] == home, (
@@ -159,34 +122,16 @@ def test_every_boat_starts_and_ends_at_its_home_port(solved):
 
 
 def test_extracted_trip_times_match_the_objective(solved):
-    """Nothing is lost between the solved Problem and the extracted trips.
-
-    The stochastic evaluator only ever sees the extracted trips, so anything
-    dropped here is invisible downstream. Port-to-port repositioning legs have
-    two nodes like empty padding trips but carry real travel time, and were
-    silently discarded once before.
-    """
+    """Check that extracted trip times still match the solver objective."""
     extracted = sum(t["total_time"] for t in solved["trips"])
     assert extracted == pytest.approx(solved["objective"], abs=1e-9), (
         f"objective {solved['objective']:.4f} but trips sum to "
         f"{extracted:.4f}, a gap of {solved['objective'] - extracted:.4f} h"
     )
-
-
-# ---------------------------------------------------------------------------
 # Stochastic evaluation
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize("strategy", sorted(DETOUR_STRATEGIES))
 def test_realised_time_is_never_below_planned(solved, scenarios, strategy):
-    """The one invariant no detour strategy may break.
-
-    They add detours to an unchanged route and none removes work, so realised
-    time is bounded below by planned. One that comes in under it has lost work.
-
-    Repair is excluded on purpose: it replaces the route, so coming in under
-    the plan is the result rather than a bug. Coverage guards it instead.
-    """
+    """Check that detour strategies never lose planned work."""
     evaluator = StochasticEvaluator(scenarios=scenarios)
     result = evaluator.evaluate(solved["trips"], solved["instance"],
                                 strategy=strategy)
@@ -200,25 +145,9 @@ def test_realised_time_is_never_below_planned(solved, scenarios, strategy):
         f"{strategy}: a scenario realised {worst:.2f} h against a planned "
         f"{planned:.2f} h, which is {planned - worst:.2f} h of work lost"
     )
-
-
-# ---------------------------------------------------------------------------
 # Instance parameters
-# ---------------------------------------------------------------------------
-
 def test_fishing_time_limit_has_little_slack(solved):
-    """Documents how tight the fishing time limit is, rather than asserting it.
-
-    fish_time_limit=120 and work_limit=160 are hardcoded defaults in
-    load_gfsp_full_problem's signature, not read from full_problem.txt the way
-    the subproblem values come from the gfsp formulas. The best trip lands
-    around 119.3 h against the 120 h limit -- feasible by well under an hour.
-
-    Both now match Saahil's test_problem00, the instance with the real unequal
-    fleet. The freshness limit is load-bearing and has almost no slack, so this
-    test fails if that changes materially -- the signal to go and check it
-    rather than to adjust the number here.
-    """
+    """Check that the full-problem fish-time limit has little slack."""
     limit = solved["instance"].fish_time_limit
     slack = limit - solved["worst_fish_time"]
 

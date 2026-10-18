@@ -77,8 +77,7 @@ def make_fake_time_matrix():
     return tm
 
 
-# ---- Tests ----
-
+# Tests
 def test_extract_station_ordinals():
     """Check that node lists correctly map to station ordinals."""
     nodes = [0, 13, 14, 15, 16, 17, 18, 0]
@@ -122,7 +121,7 @@ def test_capacity_exceedance():
     inst = make_fake_instance()
     tm = make_fake_time_matrix()
 
-    # Trip 0 visits stations 0,1,2. Set catch so cumulative exceeds 250 at station 2.
+    # Overflow occurs at station 2 when cumulative catch exceeds 250.
     catch = np.full(581, 50.0)
     catch[0] = 100.0   # cumulative after stn 0: 100
     catch[1] = 100.0   # cumulative after stn 1: 200
@@ -138,7 +137,7 @@ def test_capacity_exceedance():
     assert result["capacity_exceeded"], "Should exceed capacity"
     assert result["n_unscheduled_returns"] >= 1, "Should have at least 1 unscheduled return"
 
-    # Trip 0 should have detour time added (2 * 5.0 = 10.0 for nearest port round trip)
+    # The nearest-port round trip adds 2 * 5.0 hours.
     trip0 = result["trip_details"][0]
     print(f"  Trip 0 detour_time: {trip0['detour_time']}")
     print(f"  Trip 0 adjusted_time: {trip0['adjusted_time']} (original: 50.0)")
@@ -238,8 +237,7 @@ def test_boat_id_capacity_mapping():
 
 
 
-# ---- Monte Carlo tests ----
-
+# Monte Carlo tests
 def test_monte_carlo_with_scenarios():
     """Test StochasticEvaluator with pre-generated scenario matrix."""
     from unified.stochastic_eval import StochasticEvaluator, print_stochastic_summary
@@ -348,5 +346,4 @@ def test_station_port_times_ignores_non_ports():
     out = station_port_times(inst, tm)
     assert out[0] == 5.0, "station 19 is not a port"
     print("PASS: station_port_times ignores non-ports\n")
-
 

@@ -1,28 +1,7 @@
-"""Stochastic catch scenario generation for the groundfish survey.
+"""Generate 581-station catch scenarios from historical survey data.
 
-Bridges Jess's historical catch distributions (simulations/) with the
-solver's 581-station ordinal system (gfsp_code/).
-
-Station fallback strategy
--------------------------
-The solver defines 581 stations (ordinals 0-580 from smb.2019.dat). The
-historical spring survey data (spring_historical_english.xlsx) covers only 518
-of these as unique tow_station IDs, so there are two tiers:
-
-  Tier 1 (518 stations) — the station's own records, fitted to a normal.
-
-  Tier 2 (63 stations) — the fit of the nearest station that has records, by
-      Euclidean distance between tow midpoints in decimal degrees. Candidates
-      are tier 1 only, so nothing inherits an inherited fit.
-
-A regional tier sat between these until 2026-10-08, pooling records from
-stations sharing the leading digits of the tow number (`tow_station // 100`)
-and catching 35 of the 63. It was dropped: those digits are a coding artefact
-rather than a claim about where fish are, and one geographic rule is easier to
-justify and to describe. The 35 stations gained 17.3% on the mean
-(944.7 -> 1107.7 kg); the fleet-wide mean moved +1.22%.
-
-All distributions are truncated at zero when sampling (no negative catch).
+Stations with no records use the nearest station with records. Samples are
+normal draws clipped at zero.
 """
 
 import os
@@ -39,23 +18,13 @@ if _SIM_DIR not in sys.path:
 from create_distributions import create_distributions
 
 N_STATIONS = 581
-
-
-# ---------------------------------------------------------------------------
 # Coordinate helpers
-# ---------------------------------------------------------------------------
-
 def _degmin2deg(val):
     """Convert degree-minute encoded integers to decimal degrees."""
     val = np.asarray(val, dtype=float)
     min_ = (val / 100) - np.floor(val / 10000.0) * 100.0
     return (val + (200.0 / 3.0) * min_) / 10000.0
-
-
-# ---------------------------------------------------------------------------
 # Station mapping
-# ---------------------------------------------------------------------------
-
 def _load_station_map():
     """Parse smb.2019.dat and return mapping tables + midpoint coordinates.
 
@@ -88,11 +57,7 @@ def _load_station_map():
         (deg[:, 1] + deg[:, 3]) / 2,  # mid lon
     ])
     return ordinal_to_tow, tow_to_ordinal, midpoints
-
-
-# ---------------------------------------------------------------------------
 # Fit cache
-# ---------------------------------------------------------------------------
 # Cached because fitting takes ~138s and the inputs never change.
 
 _SMB_PATH = os.path.join(_ROOT, "gfsp_code", "data", "smb.2019.dat")
@@ -142,24 +107,12 @@ def _tows_to_maps(tows):
     ordinal_to_tow = {int(o): int(t) for o, t in enumerate(tows)}
     tow_to_ordinal = {int(t): int(o) for o, t in enumerate(tows)}
     return ordinal_to_tow, tow_to_ordinal
-
-
-# ---------------------------------------------------------------------------
 # Distribution fitting
-# ---------------------------------------------------------------------------
-
 def _fit_distributions(df, ordinal_to_tow, tow_to_ordinal, midpoints):
     """Fit catch distributions for all 581 stations, with one fallback.
 
-    518 stations have their own records and use Jess's create_distributions()
-    from simulations/. The other 63 take the fit of the nearest station that
-    does, by straight-line distance between tow midpoints.
-
-    Dropped 2026-10-08: a regional tier that grouped by `tow_station // 100`
-    and caught 35 of the 63. Grouping on the tow number's leading digits is a
-    coding artefact, not a statement about where fish are, and one geographic
-    rule is easier to justify and to describe. Those 35 stations gain 17.3% on
-    the mean (944.7 -> 1107.7 kg); the fleet-wide mean moves +1.22%.
+    Stations with records use their own fitted distribution. The rest use the
+    nearest station with records.
 
     Parameters
     ----------
@@ -184,7 +137,7 @@ def _fit_distributions(df, ordinal_to_tow, tow_to_ordinal, midpoints):
     catch_df = df[['tow_station', 'catch']].dropna().copy()
     catch_df['tow_station'] = catch_df['tow_station'].astype(int)
 
-    # --- Tier 1: per-station distributions (Jess's function) ---
+    # Tier 1: per-station distributions (Jess's function)
     station_dists = create_distributions(catch_df, group_col='tow_station',
                                          catch_col='catch')
 
@@ -197,7 +150,7 @@ def _fit_distributions(df, ordinal_to_tow, tow_to_ordinal, midpoints):
             stds[ordinal] = std if pd.notna(std) else params['mean'] * 0.3
             tiers[ordinal] = 1
 
-    # --- Tier 2: nearest station that has records ---
+    # Tier 2: nearest station that has records
     # Candidates are tier 1 only, so no station inherits a fit that was itself
     # inherited -- otherwise the choice would depend on fitting order.
     has_dist = np.where(tiers == 1)[0]
@@ -213,12 +166,7 @@ def _fit_distributions(df, ordinal_to_tow, tow_to_ordinal, midpoints):
             tiers[ordinal] = 2
 
     return means, stds, tiers
-
-
-# ---------------------------------------------------------------------------
 # Main class
-# ---------------------------------------------------------------------------
-
 class CatchSimulator:
     """Generate stochastic catch scenarios for the 581-station survey network.
 

@@ -36,8 +36,7 @@ def _result(n=1000, p_exceed=0.5, penalty_mean=20.0, penalty_std=10.0,
     }
 
 
-# ---- Wilson interval on a proportion --------------------------------------
-
+# Wilson interval on a proportion
 @pytest.mark.parametrize("k,n", [(0, 100), (1, 100), (50, 100), (99, 100),
                                  (100, 100), (990, 1000), (1000, 1000)])
 def test_wilson_stays_inside_the_unit_interval(k, n):
@@ -85,8 +84,7 @@ def test_wilson_on_no_scenarios_is_not_a_division_error():
     assert _wilson_ci(0, 0) == (0.0, 0.0)
 
 
-# ---- the penalty, and its interval ----------------------------------------
-
+# the penalty, and its interval
 def test_penalty_is_carried_through_from_the_evaluator():
     """It was computed all along and thrown away before the row was built."""
     row = summarise(_result(penalty_mean=21.4), planned=375.3, n_trips=10)
@@ -114,8 +112,7 @@ def test_a_result_without_a_penalty_distribution_still_summarises():
     assert row["penalty_ci95"] == 0.0
 
 
-# ---- the row the table reads ----------------------------------------------
-
+# the row the table reads
 def test_exceedance_interval_brackets_the_point_estimate():
     row = summarise(_result(n=1000, p_exceed=0.98), planned=1.0, n_trips=1)
     assert row["p_exceed_lo"] < row["p_exceed"] < row["p_exceed_hi"]
@@ -128,8 +125,7 @@ def test_every_interval_column_is_actually_produced():
         assert key in row, f"{key} is a column but not a row key"
 
 
-# ---- the columns the Results tables need ----------------------------------
-
+# the columns the Results tables need
 def _scenario(boats, times):
     """One per-scenario result with given per-boat trip times."""
     return {"n_unscheduled_returns": 0,
@@ -193,8 +189,7 @@ def test_plan_balance_of_nothing_is_nothing():
     assert _plan_balance([]) == {}
 
 
-# ---- paired across buffers ------------------------------------------------
-
+# paired across buffers
 def test_paired_across_buffers_recovers_a_known_difference():
     """The buffer question rests on this table, so pin what it computes."""
     from experiments.full_sweep import _paired_across_buffers

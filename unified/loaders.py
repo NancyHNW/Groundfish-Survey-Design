@@ -11,12 +11,7 @@ from .problem import ProblemInstance
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 _GFSP_DATA = os.path.join(_ROOT, "gfsp_code", "data")
 _HEURISTIC_DIR = os.path.join(_ROOT, "final_code")
-
-
-# ---------------------------------------------------------------------------
 # gfsp_code test problems
-# ---------------------------------------------------------------------------
-
 def load_gfsp_problem(ns, nv, cf, instance) -> ProblemInstance:
     """Load a test problem from gfsp_code/data/test_problems/.
 
@@ -95,12 +90,7 @@ def load_gfsp_full_problem(capacities=None, n_boats=4, home_port_index=0,
         work_limit=work_limit,
         source="gfsp",
     )
-
-
-# ---------------------------------------------------------------------------
 # Heuristic test problems (final_code/better_test_problems)
-# ---------------------------------------------------------------------------
-
 def load_heuristic_problem(prob_id) -> ProblemInstance:
     """Load a test problem from final_code/better_test_problems/.
 
@@ -144,12 +134,7 @@ def load_heuristic_problem(prob_id) -> ProblemInstance:
         source="heuristic",
         upper_bound=upper_bound,
     )
-
-
-# ---------------------------------------------------------------------------
 # Discovery helpers
-# ---------------------------------------------------------------------------
-
 def list_gfsp_problems():
     """Return a list of available (ns, nv, capacity, instance) tuples."""
     base = os.path.join(_GFSP_DATA, "test_problems")

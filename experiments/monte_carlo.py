@@ -1,26 +1,7 @@
-"""Which solver gives the most robust routes?
+"""Compare heuristic planners on shared catch scenarios.
 
-Solves the same instance with each heuristic and scores every solution against
-one shared set of catch scenarios, so the comparison is about the solutions and
-not the sampling. A solver that wins on deterministic time does not necessarily
-win once the catch is uncertain.
-
-    python -m experiments.monte_carlo --ns 100 --nv 2 --cf 125 --time-limit 60
-    python -m experiments.monte_carlo --all-methods --full --time-limit 300 \
-        --n-scenarios 1000 --strategy forward --no-histograms
-
-Unlike `strategies`, every row here comes from its **own solve** -- the method
-is what is being swept, and the method is what builds the routes. So the
-differences between rows carry solver noise as well as the catch, and the
-+/-95% column, which is scenario sampling only, understates them. Two defences,
-both needed:
-
-  * the paired-across-scenarios table, which prices the difference between two
-    fixed plans far more precisely than two overlapping per-row error bars can;
-  * `experiments.variance`, which is what establishes that the solver is
-    effectively deterministic at these budgets and so that the pairing above is
-    measuring the methods rather than the restarts. Run it before quoting any
-    of this.
+Each method solves the instance independently, then its route is evaluated on
+the same scenarios. This separates method differences from scenario sampling.
 """
 
 import time
@@ -31,9 +12,7 @@ from experiments.common import (CORE_COLUMNS, INTERVAL_COLUMNS, REPAIR_COLUMNS,
                                 print_paired, print_table, save_csv,
                                 strategy_tag, sweep_solve)
 
-# Every planner the solver exposes, weakest first, so `vs first` reads as the
-# gain over construction alone and the baseline of the paired table is the
-# method nobody would actually ship.
+# Keep the planner order stable so paired differences use the same baseline.
 ALL_METHODS = ("grasp_only", "grasp_swap", "tabu_swap", "tabu_move",
                "tabu_combined", "sa")
 

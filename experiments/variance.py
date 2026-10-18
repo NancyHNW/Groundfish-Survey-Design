@@ -1,23 +1,7 @@
-"""Which matters more: which routes the solver found, or what the catch did?
+"""Compare solver variation with catch variation.
 
-Every comparison in this project rests on an answer to that. If two solves of
-the same instance differ by more than two catch draws on one solve do, then a
-single-solve result is measuring the solver, not the thing being studied --
-which is why three buffer tables gave three answers in August.
-
-The design is a two-factor one:
-
-    solve S times with different seeds      -> S routes
-    score every route on the SAME K scenarios
-
-Sharing one scenario set across routes is what keeps the two sources apart.
-The decomposition is then a one-way variance split over realised time:
-
-    between-route   variance of the per-route means     = solver noise
-    within-route    mean of the per-route variances     = catch noise
-
-    python -m experiments.variance --ns 100 --nv 2 --cf 125 \
-        --time-limit 60 --solver-seeds 1 2 3 ... --n-scenarios 500
+Each route is scored on the same scenario set. Between-route variation
+measures solver noise; within-route variation measures catch noise.
 """
 
 import math

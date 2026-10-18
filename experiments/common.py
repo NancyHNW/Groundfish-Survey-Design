@@ -25,12 +25,7 @@ METHODS = {
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 OUTPUT_DIR = os.path.join(_ROOT, "tests", "outputs")
-
-
-# ---------------------------------------------------------------------------
 # Output
-# ---------------------------------------------------------------------------
-
 def output_path(name, tag, inst=None, ext=".png", home_ports=None):
     """Build a path under tests/outputs/ from experiment, tag and problem size.
 
@@ -85,12 +80,7 @@ def _write_csv(rows, path):
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-
-
-# ---------------------------------------------------------------------------
 # Solving and evaluating
-# ---------------------------------------------------------------------------
-
 def make_evaluator(scenario_seed=123, n_scenarios=500):
     """Build a StochasticEvaluator over one fixed set of catch scenarios.
 
@@ -128,23 +118,15 @@ def solve(ns=100, nv=2, cf=125, instance=1, method="tabu_move",
     )
     result["planned_time"] = sum(t["total_time"] for t in result["trips"])
     return result
-
-
-# ---------------------------------------------------------------------------
 # Saved plans
-# ---------------------------------------------------------------------------
-
 PLAN_DIR = os.path.join(_ROOT, "tests", "plans")
 
-# What has to match before a saved plan may be reused. Scoring keys are not in
-# here -- the whole point is to score one plan many ways.
+# These keys must match before a saved plan is reused.
 _PLAN_KEYS = ("ns", "nv", "cf", "instance", "method", "time_limit",
               "catch_source", "capacity_buffer", "full", "home_ports", "seed")
 
 
-# What solve() uses when a caller leaves a key out. Without this an experiment
-# that omits seed records seed=None while one that passes 42 records 42, for
-# the same solve -- which is the mismatch this whole mechanism is here to stop.
+# Fill in solve() defaults so equivalent calls describe the same plan.
 _PLAN_DEFAULTS = {"seed": 42, "full": False, "home_ports": None}
 
 
@@ -496,12 +478,7 @@ def add_baseline_delta(rows, key, baseline_value, column="vs_baseline"):
     for row in rows:
         row[column] = row["mean"] - baseline
     return rows
-
-
-# ---------------------------------------------------------------------------
 # Paired comparison
-# ---------------------------------------------------------------------------
-
 def strategy_tag(strategy, repair_scope="trip", repair_planner="nn"):
     """Name a run's strategy for its output filename.
 
@@ -758,12 +735,7 @@ def print_paired(rows, baseline, title=None):
     show(f"Beats {baseline}:", better)
     show(f"Reliably worse than {baseline}:", worse)
     show(f"Cannot separate from {baseline}:", flat)
-
-
-# ---------------------------------------------------------------------------
 # Reporting
-# ---------------------------------------------------------------------------
-
 # (key, header, width, format spec), used by every experiment table
 CORE_COLUMNS = [
     ("planned", "planned", 9, ".1f"),
@@ -836,12 +808,7 @@ def print_table(rows, columns, title=None):
             text = format(value, fmt) if (fmt and value != "") else str(value)
             line += f"{text:>{w}}"
         print(line)
-
-
-# ---------------------------------------------------------------------------
 # Command line
-# ---------------------------------------------------------------------------
-
 def base_parser():
     """Flags shared by every experiment.
 

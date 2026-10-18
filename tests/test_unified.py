@@ -1,18 +1,6 @@
-"""Tests for the unified adapter layer.
+"""Tests for loaders, adapters, and unified solver outputs.
 
-Organised into three groups:
-  1. Loader fidelity   — ProblemInstance matches raw file contents
-  2. Adapter correctness — conversion to solver formats preserves semantics
-  3. Output consistency — deterministic seeds → reproducible results (golden baselines)
-
-Run with:
-    cd <repo-root>
-    python -m pytest tests/test_unified.py -v
-
-First run generates golden_baselines.json.  Subsequent runs compare against it.
-
-To run only fast tests (no solver execution):
-    python -m pytest tests/test_unified.py -v -m "not slow"
+Run with ``python -m pytest tests/test_unified.py -v``.
 """
 
 import gc
@@ -39,18 +27,10 @@ from unified.evaluate import (
     solution_to_trips,
     compute_total_time,
 )
-
-# ---------------------------------------------------------------------------
 # Paths
-# ---------------------------------------------------------------------------
 GFSP_DATA = os.path.join(ROOT, "gfsp_code", "data")
 HEURISTIC_DIR = os.path.join(ROOT, "final_code")
-
-
-# ===================================================================
 # GROUP 1 — Loader fidelity
-# ===================================================================
-
 class TestGfspLoader:
     """Verify load_gfsp_problem matches raw file contents."""
 
@@ -181,12 +161,7 @@ class TestDiscovery:
         """Should be 1620 = 6 sizes * 3 vessels * 3 capacities * 30 instances."""
         problems = list_gfsp_problems()
         assert len(problems) == 1620
-
-
-# ===================================================================
 # GROUP 2 — Adapter correctness
-# ===================================================================
-
 class TestNodeConversion:
     """Verify station_id <-> node_index helpers."""
 
@@ -340,12 +315,7 @@ class TestCrossSourceLoading:
             prob = to_heuristic_problem(inst, catch_source="heuristic")
             assert prob.n_boats == inst.n_boats
             assert prob.n_stations == inst.ns * 2
-
-
-# ===================================================================
 # GROUP 3 — Output consistency (determinism + golden baselines)
-# ===================================================================
-
 class TestDeterminism:
     """Same seed must produce identical results across two runs.
 
@@ -556,7 +526,7 @@ class TestDirectVsUnified:
             from classes import Problem
             from unified.adapters import _load_gfsp_catch_array, override_catch_data
 
-            # --- Unified path ---
+            # Unified path
             prob_unified = to_heuristic_problem(inst, catch_source="gfsp")
             prob_unified.generate_initial_solution(seed=42)
             sol_unified = prob_unified.save_solution_as_list()
@@ -567,7 +537,7 @@ class TestDirectVsUnified:
             obj_unified, pen_unified = prob_unified.evaluate_solution(
                 k_catch, k_fish, 10000)
 
-            # --- Direct path (replicate what the unified layer does) ---
+            # Direct path (replicate what the unified layer does)
             node_indices = list(inst.station_ids_to_node_indices())
             home_ports_list = [inst.home_port] * inst.n_boats
 
@@ -617,7 +587,7 @@ class TestDirectVsUnified:
         with heuristic_context():
             from classes import Problem
 
-            # --- Unified path ---
+            # Unified path
             prob_unified = to_heuristic_problem(inst, catch_source="heuristic")
             prob_unified.generate_initial_solution(seed=42)
             sol_unified = prob_unified.save_solution_as_list()
@@ -630,7 +600,7 @@ class TestDirectVsUnified:
                 k_catch, k_fish, upper_bound
             )
 
-            # --- Direct path ---
+            # Direct path
             node_indices = list(inst.station_ids_to_node_indices())
             home_ports_list = [inst.home_port] * inst.n_boats
 

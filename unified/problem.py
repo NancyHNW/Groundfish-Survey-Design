@@ -24,8 +24,7 @@ class ProblemInstance:
     source: str = ""              # "gfsp" or "saahil"
     upper_bound: float = np.inf   # optional upper bound on objective
 
-    # ---- conversion helpers ------------------------------------------------
-
+    # conversion helpers
     def station_ids_to_node_indices(self) -> np.ndarray:
         """Convert station ordinals to raw node indices (pairs)."""
         s = self.station_ids

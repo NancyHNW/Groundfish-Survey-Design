@@ -84,14 +84,12 @@ CASES = [
                           "repair_planner": "2opt"}),
     ("repair_boat_2opt", {"strategy": "repair", "repair_scope": "boat",
                           "repair_planner": "2opt"}),
-    # ~1000x the cost of nn per repair. Fine on ns100, not on --full.
+    # Much slower than nearest neighbour; use only on small problems.
     ("repair_trip_solver", {"strategy": "repair", "repair_scope": "trip",
                             "repair_planner": "solver"}),
     ("repair_boat_solver", {"strategy": "repair", "repair_scope": "boat",
                             "repair_planner": "solver"}),
-    # tabu moves stations between the boat's own trips, which is the decision
-    # an overflow invalidates. Ties with solver at trip scope -- nothing to
-    # split -- and beats it by ~8h at boat scope. ~4 min per row on ns100.
+    # Tabu can move stations between the boat's trips after an overflow.
     ("repair_trip_tabu", {"strategy": "repair", "repair_scope": "trip",
                           "repair_planner": "tabu"}),
     ("repair_boat_tabu", {"strategy": "repair", "repair_scope": "boat",
@@ -131,8 +129,7 @@ def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
             in sweep_eval(trips, inst, cases, evaluator, planned,
                           planned_catch=det.get("planned_catch"))]
 
-    # Forward is the reference: it is the default policy (Section 3.3.3) and
-    # the one the survey actually matches.
+    # Forward is the operational reference policy.
     add_baseline_delta(rows, "case", "forward", "vs_forward")
 
     print_table(rows, COLUMNS,

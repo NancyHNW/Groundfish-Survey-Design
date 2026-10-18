@@ -57,12 +57,7 @@ def make_time_matrix(travel=5.0):
     tm = np.full((1175, 1175), travel)
     np.fill_diagonal(tm, 0.0)
     return tm
-
-
-# ---------------------------------------------------------------------------
 # Registry
-# ---------------------------------------------------------------------------
-
 # Exact output of the three detour strategies. A tripwire, not a spec: if these
 # move, find what changed the model before editing the numbers.
 GOLDEN = {
@@ -130,12 +125,7 @@ def test_unknown_strategy_is_rejected():
         evaluate_single_realisation(
             make_trips(), make_instance(), np.full(581, 50.0),
             time_matrix=make_time_matrix(), strategy="teleport")
-
-
-# ---------------------------------------------------------------------------
 # Invariants that must hold for every strategy
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize("strategy", DETOUR_STRATEGIES)
 def test_realised_time_never_below_planned(strategy):
     """Detour strategies only add to an unchanged route, so realised >= planned.
@@ -189,12 +179,7 @@ def test_reports_its_own_name(strategy):
         make_trips(), make_instance(), np.full(581, 50.0),
         time_matrix=make_time_matrix(), strategy=strategy)
     assert result["strategy"] == strategy
-
-
-# ---------------------------------------------------------------------------
 # Behaviour specific to each strategy
-# ---------------------------------------------------------------------------
-
 def test_backtrack_detour_is_there_and_back():
     """Boat 0 fills at station 2; backtrack costs 2 x travel to nearest port."""
     catch = np.full(581, 50.0)
@@ -334,12 +319,7 @@ def test_preemptive_still_reports_a_real_exceedance():
 
     assert any(not e["preemptive"] for e in result["overflow_events"])
     assert result["capacity_exceeded"] is True
-
-
-# ---------------------------------------------------------------------------
 # Which end of the tow does a strategy leave from?
-# ---------------------------------------------------------------------------
-
 def _tow_geometry():
     """A tow whose two ends have different nearest ports.
 
@@ -400,11 +380,7 @@ def test_repair_prices_the_diversion_from_where_it_sailed():
     assert e["detour_time"] == 2.0, (
         "the leg is exit -> port 4 = 2.0; charging the entry would give 1.0 "
         "and bill the boat from an end it is not at")
-
-
-# ---------------------------------------------------------------------------
 # Does the time charged equal the route sailed?
-# ---------------------------------------------------------------------------
 #
 # The strongest check available, because it needs no knowledge of the right
 # answer -- it only asks the evaluator to agree with itself. The entry/exit

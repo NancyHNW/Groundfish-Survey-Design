@@ -119,8 +119,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=None,
                         help="Seed for the single catch draw "
                              "(default: a new realisation each run)")
-    # --full now comes from base_parser(), so every experiment can reach the
-    # full problem rather than just this one.
+    # base_parser() provides --full for every experiment.
     parser.add_argument("--no-catch-table", dest="catch_table",
                         action="store_false",
                         help="Skip the per-station catch table")

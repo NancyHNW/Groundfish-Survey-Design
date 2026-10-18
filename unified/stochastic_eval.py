@@ -265,12 +265,7 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         "repair_cap_hit": stats["repair_cap_hit"],
         "repaired_routes": repaired_routes,
     }
-
-
-# ---------------------------------------------------------------------------
 # Strategy implementations
-# ---------------------------------------------------------------------------
-
 def _walk_backtrack(station_ordinals, station_nodes, station_exits,
                     catch_vector, boat_capacity, port_nodes, time_matrix,
                     trip_idx, boat_id, overflow_events):
@@ -448,12 +443,7 @@ def _walk_preemptive(station_ordinals, station_nodes, station_exits,
             cumulative_catch = 0.0
 
     return detour_time
-
-
-# ---------------------------------------------------------------------------
 # Repair
-# ---------------------------------------------------------------------------
-
 def _leg_time(nodes, time_matrix):
     """Travel time along a node sequence."""
     return sum(time_matrix[a, b] for a, b in zip(nodes, nodes[1:]))
@@ -1038,12 +1028,7 @@ def _walk_repair(station_ordinals, station_nodes, station_exits,
             record.append([int(port), int(end_port)])
 
     return realised - planned_time
-
-
-# ---------------------------------------------------------------------------
 # Strategy registry
-# ---------------------------------------------------------------------------
-
 # The overflow responses a boat can take, by name. Single place that knows
 # which strategies exist: evaluate_single_realisation validates against it and
 # the experiment CLIs read their --strategy choices from it.
@@ -1101,13 +1086,7 @@ def _find_nearest_port(station_node, port_nodes, time_matrix):
             best_time = t
             best_port = p
     return best_port, best_time
-
-
-# ---------------------------------------------------------------------------
 # Monte Carlo evaluation
-# ---------------------------------------------------------------------------
-
-
 class StochasticEvaluator:
     """Run Monte Carlo evaluation of a routing solution under catch uncertainty.
 
@@ -1201,7 +1180,7 @@ class StochasticEvaluator:
             )
             results.append(result)
 
-        # --- Aggregate ---
+        # Aggregate
         capacity_exceeded = [r["capacity_exceeded"] for r in results]
         fish_time_violated = [r["fish_time_violated"] for r in results]
         unscheduled_returns = [r["n_unscheduled_returns"] for r in results]
@@ -1329,7 +1308,7 @@ def plot_monte_carlo(stoch_result, save_path=None, deterministic_time=None,
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-    # --- Left: total time histogram ---
+    # Left: total time histogram
     ax1.hist(total_times, bins=40, color="#4C72B0", alpha=0.8, edgecolor="white")
     if deterministic_time is not None:
         ax1.axvline(deterministic_time, color="green", linestyle="-", linewidth=2.5,
@@ -1345,7 +1324,7 @@ def plot_monte_carlo(stoch_result, save_path=None, deterministic_time=None,
     ax1.set_title("Realised survey time", fontsize=11)
     ax1.legend(fontsize=8)
 
-    # --- Right: unscheduled returns histogram ---
+    # Right: unscheduled returns histogram
     returns = [r["n_unscheduled_returns"] for r in stoch_result["all_results"]]
     max_ret = max(returns) if returns else 0
     bins = np.arange(-0.5, max_ret + 1.5, 1)
@@ -1579,7 +1558,7 @@ def plot_buffer_comparison(rows, save_path=None, title_suffix=None):
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
 
-    # --- Left: the tradeoff in hours ---
+    # Left: the tradeoff in hours
     ax1.fill_between(x, [r["p5"] for r in rows], [r["p95"] for r in rows],
                      color="#4C72B0", alpha=0.15, label="Realised 5th-95th pct")
     ax1.plot(x, [r["mean"] for r in rows], "o-", color="#4C72B0", linewidth=2,
@@ -1598,7 +1577,7 @@ def plot_buffer_comparison(rows, save_path=None, title_suffix=None):
     ax1.legend(fontsize=8)
     ax1.grid(alpha=0.3)
 
-    # --- Right: what the buffer buys ---
+    # Right: what the buffer buys
     ax2.plot(x, [r["p_exceed"] * 100 for r in rows], "o-", color="#C44E52",
              linewidth=2, label="P(capacity exceeded)")
     ax2.set_xlabel("Planning buffer (% of true capacity)")
@@ -1634,12 +1613,7 @@ def plot_buffer_comparison(rows, save_path=None, title_suffix=None):
     else:
         plt.show()
     plt.close(fig)
-
-
-# ---------------------------------------------------------------------------
 # Visualisation
-# ---------------------------------------------------------------------------
-
 def _load_nodes():
     """Load all node coordinates (ports + stations) as (1175, 2) array.
 
@@ -1858,7 +1832,7 @@ def plot_realisation(solution_trips, instance, result, save_path=None):
 
     fig, (ax_plan, ax_sim) = plt.subplots(1, 2, figsize=(28, 10))
 
-    # --- Left: planned route ---
+    # Left: planned route
     _draw_base_map(ax_plan, nodes, n_ports, island, instance)
     _draw_routes(ax_plan, solution_trips, nodes)
     ax_plan.set_xlabel("Longitude")
@@ -1866,7 +1840,7 @@ def plot_realisation(solution_trips, instance, result, save_path=None):
     ax_plan.set_title(f"Planned Route — total time: {result['original_total_time']:.1f}")
     ax_plan.legend(loc="lower right", fontsize=8)
 
-    # --- Right: simulated route with overflows ---
+    # Right: simulated route with overflows
     _draw_base_map(ax_sim, nodes, n_ports, island, instance)
     _draw_routes(ax_sim, solution_trips, nodes)
     drew_repair = _draw_repaired_routes(ax_sim, result, nodes)
@@ -1976,7 +1950,7 @@ def plot_time_comparison(solution_trips, result, save_path=None):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6),
                                     gridspec_kw={"width_ratios": [2, 1]})
 
-    # --- Left: per-trip bar chart ---
+    # Left: per-trip bar chart
     bars1 = ax1.bar(x - width/2, original_times, width, label="Planned",
                     color="#4C72B0", alpha=0.85)
     bars2 = ax1.bar(x + width/2, adjusted_times, width, label="Actual (with detours)",
@@ -1997,7 +1971,7 @@ def plot_time_comparison(solution_trips, result, save_path=None):
     ax1.set_xticklabels(labels, fontsize=8)
     ax1.legend()
 
-    # --- Right: total summary ---
+    # Right: total summary
     totals = [result["original_total_time"], result["total_time"]]
     bar_labels = ["Planned\nTotal", "Actual\nTotal"]
     colors = ["#4C72B0", "#DD8452"]
@@ -2029,12 +2003,7 @@ def plot_time_comparison(solution_trips, result, save_path=None):
     else:
         plt.show()
     plt.close(fig)
-
-
-# ---------------------------------------------------------------------------
 # Where overflows happen
-# ---------------------------------------------------------------------------
-
 # Magnitude, not identity, so a sequential single hue rather than the
 # categorical strategy palette. Light-to-dark on one hue: rare stations recede,
 # costly ones read immediately, and it survives greyscale and colour blindness

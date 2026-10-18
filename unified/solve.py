@@ -1,16 +1,4 @@
-"""Run the heuristic solvers on a gfsp test problem.
-
-The solver entry point the rest of the code builds on: load a problem, convert
-it to the heuristic Problem class, run GRASP plus a neighbourhood search, and
-return the evaluated solution.
-
-No plotting and no experiments in here. Those live in the experiments package,
-which calls in through experiments.common.solve.
-
-Run one solve directly:
-
-    python -m unified.solve --ns 100 --nv 2 --cf 125 --method tabu_move
-"""
+"""Run an inherited heuristic solver on a GFSP problem."""
 
 import time
 

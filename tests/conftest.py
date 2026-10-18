@@ -171,7 +171,7 @@ def _patch_time_matrix_caching():
 
     yield
 
-    # Restore originals (not strictly necessary since tests end here)
+    # Restore the original files.
     with heuristic_context():
         import classes
         classes.Trip.__init__ = _orig_trip_init

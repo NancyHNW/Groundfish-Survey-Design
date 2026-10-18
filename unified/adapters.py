@@ -1,10 +1,4 @@
-"""Adapters that convert a ProblemInstance into solver-specific objects.
-
-The heuristic code (final_code/) relies on hardcoded relative paths for data
-files, so we temporarily change the working directory when constructing
-his Problem objects.  Use the ``heuristic_context`` context manager to
-handle this safely.
-"""
+"""Convert unified problem instances to the inherited solver formats."""
 
 import os
 import sys
@@ -16,24 +10,10 @@ from .problem import ProblemInstance
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 _FINAL_CODE = os.path.join(_ROOT, "final_code")
 _GFSP_SRC = os.path.join(_ROOT, "gfsp_code", "src")
-
-
-# ---------------------------------------------------------------------------
 # Context manager for The heuristic code
-# ---------------------------------------------------------------------------
-
 @contextlib.contextmanager
 def heuristic_context():
-    """Context manager that sets up CWD and sys.path for The heuristic code.
-
-    Usage::
-
-        with heuristic_context():
-            from classes import Problem, Boat, Trip
-            from neighbourhood_rules import *
-            prob = to_heuristic_problem(instance)
-            prob.GRASP(rcl_size=2, seed=42)
-    """
+    """Temporarily set the paths needed by the heuristic solver."""
     old_cwd = os.getcwd()
     added_path = False
     try:
@@ -46,39 +26,16 @@ def heuristic_context():
         os.chdir(old_cwd)
         if added_path and _FINAL_CODE in sys.path:
             sys.path.remove(_FINAL_CODE)
-
-
-# ---------------------------------------------------------------------------
 # Convert to the heuristic code's Problem
-# ---------------------------------------------------------------------------
-
 def to_heuristic_problem(instance: ProblemInstance, catch_source="heuristic",
                          home_ports=None, capacity_buffer=1.0):
     """Convert a ProblemInstance to the heuristic ``Problem`` class.
 
-    Must be called inside a ``heuristic_context()`` block so that relative
-    data paths resolve correctly.
+    Call this inside ``heuristic_context()`` so relative data paths resolve.
 
-    Parameters
-    ----------
-    instance : ProblemInstance
-    catch_source : str
-        Which catch data to use:
-        - "heuristic" (RandomMatchingCatches.dat, mean 859 kg)
-        - "gfsp" (LimitedCatch.csv, mean 531 kg)
-        - "historical" (historical station means from CatchSimulator, mean 812 kg)
-    home_ports : list[int] or None
-        Per-vessel home port node indices. If None, all vessels
-        start from instance.home_port.
-    capacity_buffer : float
-        Fraction of the true capacity the solver plans up to.  1.0 fills the
-        hold; 0.9 leaves 10% headroom so a trip whose realised catch comes in
-        heavier than planned is less likely to overflow.  The true capacity is
-        kept on the boats for evaluation.
-
-    Returns
-    -------
-    Problem  (from final_code/classes.py)
+    ``catch_source`` selects the heuristic, GFSP, or historical catch data.
+    ``home_ports`` sets one starting port per vessel. ``capacity_buffer``
+    controls how much of the true capacity is used during planning.
     """
     # Import here because it only works when CWD is final_code/
     from classes import Problem
@@ -293,12 +250,7 @@ def override_catch_data(prob, catch_file=None, catch_array=None):
         boat.catch = catch_array
         for trip in boat.route:
             trip.catch = catch_array
-
-
-# ---------------------------------------------------------------------------
 # Convert to gfsp MIP model
-# ---------------------------------------------------------------------------
-
 @contextlib.contextmanager
 def gfsp_context():
     """Context manager that sets up sys.path for gfsp_code imports."""

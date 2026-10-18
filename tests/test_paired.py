@@ -77,8 +77,7 @@ def _forward_saves_3h_noisy(planned, eval_kw):
     return planned - 3.0 + (1.0 if int(planned // 100) % 2 else -1.0)
 
 
-# ---- the claim the harness rests on ---------------------------------------
-
+# the claim the harness rests on
 def test_recovers_a_constant_effect_exactly(stub_solve):
     """Instances 100h apart, a constant -3h effect: recover -3.0, sd zero."""
     summary, blocks = paired_compare(
@@ -120,8 +119,7 @@ def test_effect_that_flips_sign_is_not_significant(stub_solve):
     assert forward["ci_lo"] < 0 < forward["ci_hi"]
 
 
-# ---- solve sharing --------------------------------------------------------
-
+# solve sharing
 def test_scoring_only_settings_share_one_solve(stub_solve):
     """Three strategies over five instances costs five solves, not fifteen."""
     paired_compare(STRATEGIES, "backtrack", instances=range(1, 6),
@@ -166,8 +164,7 @@ def test_blocks_are_instances_crossed_with_seeds(stub_solve):
     assert all(r["n"] == 6 for r in summary)
 
 
-# ---- guards ---------------------------------------------------------------
-
+# guards
 def test_unknown_baseline_is_rejected(stub_solve):
     with pytest.raises(ValueError, match="baseline"):
         paired_compare(STRATEGIES, "nonesuch", instances=[1],
@@ -213,8 +210,7 @@ def test_significant_is_a_plain_bool(stub_solve):
     assert all(type(r["significant"]) is bool for r in summary)
 
 
-# ---- statistics -----------------------------------------------------------
-
+# statistics
 def test_interval_uses_t_not_the_normal(stub_solve):
     """At n=8 t is 2.365; 1.96 would overstate significance by a fifth."""
     summary, _ = paired_compare(
@@ -247,8 +243,7 @@ def test_t_critical_never_narrower_than_the_normal():
     assert all(_t_critical(df) >= 1.96 for df in range(1, 500))
 
 
-# ---- instance parsing -----------------------------------------------------
-
+# instance parsing
 @pytest.mark.parametrize("text,expected", [
     ("1-5", [1, 2, 3, 4, 5]),
     ("1,4,7", [1, 4, 7]),
@@ -261,8 +256,7 @@ def test_parse_instances(text, expected):
     assert parse_instances(text) == expected
 
 
-# ---- reporting ------------------------------------------------------------
-
+# reporting
 def test_verdict_separates_better_from_worse(stub_solve, capsys):
     """A setting can separate by being reliably worse, which is not a win."""
     def score(planned, eval_kw):

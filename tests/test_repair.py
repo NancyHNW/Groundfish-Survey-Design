@@ -33,8 +33,7 @@ def run(catch, strategy="repair", trips=None, instance=None, tm=None, **kw):
         strategy=strategy, **kw)
 
 
-# ---- the null case --------------------------------------------------------
-
+# the null case
 def test_no_overflow_costs_nothing():
     result = run(np.full(581, 30.0))
     assert result["n_unscheduled_returns"] == 0
@@ -48,8 +47,7 @@ def test_no_overflow_matches_backtrack_exactly():
         run(catch, strategy="backtrack")["total_time"])
 
 
-# ---- what repair must not break -------------------------------------------
-
+# what repair must not break
 def test_every_station_still_visited_exactly_once():
     """Repair rebuilds routes, so it can drop or repeat a station."""
     catch = np.full(581, 90.0)
@@ -104,8 +102,7 @@ def test_resplit_nodes_are_station_pairs():
             assert (a - N_PORTS) // 2 == (b - N_PORTS) // 2
 
 
-# ---- the re-split's own limits --------------------------------------------
-
+# the re-split's own limits
 def test_resplit_respects_the_planned_capacity():
     tm = make_time_matrix()
     belief = np.full(581, 100.0)
@@ -138,8 +135,7 @@ def test_resplit_of_nothing_is_nothing():
                        make_time_matrix(), 100.0) == []
 
 
-# ---- the free trip-boundary return ----------------------------------------
-
+# the free trip-boundary return
 def test_overflow_on_the_last_station_is_not_charged_an_out_and_back():
     """Repair has nothing left to re-plan, so only the change of port costs.
 
@@ -202,8 +198,7 @@ def test_a_higher_cap_is_never_worse_on_time():
     assert loose <= tight + 1e-9
 
 
-# ---- the catch belief -----------------------------------------------------
-
+# the catch belief
 def test_planned_catch_is_used_when_given():
     """A belief that says every station is huge forces one station per trip."""
     tm = make_time_matrix()
@@ -231,8 +226,7 @@ def test_per_station_belief_changes_the_split():
         len(_nn_resplit(0, [0, 1, 2, 3], flat, 250.0, 0, tm, 1000.0))
 
 
-# ---- accounting -----------------------------------------------------------
-
+# accounting
 def test_an_overflow_is_reported_even_when_repair_saves_time():
     """trip_exceeded comes from the events, not the sign of the time change."""
     catch = np.full(581, 50.0)
@@ -250,8 +244,7 @@ def test_trip_details_still_sum_to_the_total():
         pytest.approx(result["total_time"])
 
 
-# ---- route recording ------------------------------------------------------
-
+# route recording
 def test_recording_is_off_by_default():
     assert run(np.full(581, 90.0))["repaired_routes"] == []
 
@@ -302,8 +295,7 @@ def test_recorded_routes_are_plain_ints():
             assert all(type(n) is int for n in route)
 
 
-# ---- boat scope -----------------------------------------------------------
-
+# boat scope
 def make_multi_trips():
     """One boat, three trips of three stations each.
 
@@ -416,8 +408,7 @@ def test_boat_scope_terminates_on_absurd_catch():
     assert np.isfinite(result["total_time"])
 
 
-# ---- 2-opt ----------------------------------------------------------------
-
+# 2-opt
 def test_two_opt_is_off_by_default():
     catch = np.full(581, 130.0)
     assert multi_run(catch)["total_time"] == pytest.approx(
@@ -512,8 +503,7 @@ def test_two_opt_flips_a_single_tow():
     assert out == [0, 14, 13, 1]
 
 
-# ---- solver re-planner ----------------------------------------------------
-
+# solver re-planner
 @pytest.mark.slow
 def test_solver_resplit_covers_its_stations_exactly_once():
     plan = _solver_resplit(5, [0, 1, 2, 3, 4, 5, 6, 7], np.full(581, 4000.0),
@@ -565,8 +555,7 @@ def test_solver_beats_nearest_neighbour_on_routing():
     assert sol_time < nn_time
 
 
-# ---- keep_order re-planner ------------------------------------------------
-
+# keep_order re-planner
 def test_keep_order_preserves_the_planned_sequence():
     """The whole point: the order is tabu's output and must survive."""
     from unified.stochastic_eval import _keep_order_resplit
@@ -660,8 +649,7 @@ def test_last_station_overflow_still_sails_home():
     assert got == pytest.approx(1.0 + 40.0 - 10.0)
 
 
-# ---- no cap by default ----------------------------------------------------
-
+# no cap by default
 def test_uncapped_terminates_when_every_station_overflows_alone():
     """The cap is gone, so termination has to come from the loop itself.
 
@@ -700,8 +688,7 @@ def test_uncapped_is_never_worse_than_capped():
             <= run(catch, max_repairs=1)["total_time"] + 1e-9)
 
 
-# ---- tabu re-planner ------------------------------------------------------
-
+# tabu re-planner
 @pytest.mark.slow
 def test_tabu_beats_greedy_plus_tsp_on_a_sub_problem():
     """Why `tabu` exists: it moves stations between the boat's own trips.
