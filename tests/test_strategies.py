@@ -70,9 +70,12 @@ GOLDEN = {
     ("light", "forward"): (60.0, 0, [0.0, 0.0]),
     ("light", "preemptive"): (60.0, 0, [0.0, 0.0]),
     ("heavy", "backtrack"): (90.0, 3, [20.0, 10.0]),
+    # Trip 0 overflows mid-trip (5.0); trip 1 overflows on its LAST station,
+    # where the nearest port is the end port, so forward pays nothing (0.0).
     ("heavy", "forward"): (65.0, 2, [5.0, 0.0]),
     ("heavy", "preemptive"): (110.0, 5, [30.0, 20.0]),
     ("mid", "backtrack"): (70.0, 1, [10.0, 0.0]),
+    # Single overflow, on trip 0's last station -> change of port only, 0.0.
     ("mid", "forward"): (60.0, 1, [0.0, 0.0]),
     ("mid", "preemptive"): (70.0, 1, [10.0, 0.0]),
 }
@@ -164,11 +167,18 @@ def test_light_catch_costs_nothing(strategy):
 
 @pytest.mark.parametrize("strategy", STRATEGY_NAMES)
 def test_heavy_catch_forces_returns(strategy):
-    """200 kg/station against a 250 kg hold must overflow on every strategy."""
+    """200 kg/station against a 250 kg hold must force returns on every strategy.
+
+    It does not force an *exceedance* on preemptive: the 0.8 trigger sits at
+    exactly 200, so it lands after every station and the hold never passes 250.
+    Avoiding the exceedance is the whole point of the policy, so that assertion
+    belongs to the detour strategies only.
+    """
     result = evaluate_single_realisation(
         make_trips(), make_instance(), np.full(581, 200.0),
         time_matrix=make_time_matrix(), strategy=strategy)
-    assert result["capacity_exceeded"]
+    if strategy != "preemptive":
+        assert result["capacity_exceeded"]
     assert result["n_unscheduled_returns"] > 0
     assert result["total_time"] > result["original_total_time"]
 
@@ -269,6 +279,10 @@ def test_forward_is_cheaper_than_backtrack_at_a_trip_last_station():
     Forward has the station's catch aboard and the port was its next stop
     anyway, so it pays only the change of port. Backtrack did not fish the
     station, so it must return for it and pays the full out-and-back.
+
+    On this fixture the nearest port IS the end port (uniform matrix, so
+    argmin picks port 0, which is where trip 0 ends), making forward's detour
+    exactly zero against backtrack's 2 x 5.0.
     """
     tm = make_time_matrix(travel=5.0)
     catch = np.full(581, 50.0)
@@ -282,4 +296,178 @@ def test_forward_is_cheaper_than_backtrack_at_a_trip_last_station():
                                       strategy="forward")
 
     assert fwd["total_time"] < back["total_time"]
-    assert fwd["trip_details"][0]["detour_time"] == pytest.approx(0.0)
+    assert fwd["total_time"] == pytest.approx(back["total_time"] - 10.0)
+
+
+def test_preemptive_returns_are_not_counted_as_exceedances():
+    """Returning early is what avoids exceeding, so it cannot mean exceeding.
+
+    A load that passes the 0.8 trigger but never the hold must report
+    capacity_exceeded False while still recording the return. Counting the
+    two together made P(exceed) read 100% for preemptive against 98.6% for
+    every other method -- backwards.
+    """
+    catch = np.full(581, 110.0)        # 2 x 110 = 220: over 0.8 x 250, under 250
+    inst, trips, tm = make_instance(), make_trips(), make_time_matrix()
+
+    early = evaluate_single_realisation(trips, inst, catch, time_matrix=tm,
+                                        strategy="preemptive",
+                                        preemptive_threshold=0.8)
+
+    assert early["n_unscheduled_returns"] > 0, "fixture must trigger a return"
+    assert all(e["preemptive"] for e in early["overflow_events"])
+    assert early["capacity_exceeded"] is False
+    assert not any(d["exceeded"] for d in early["trip_details"])
+
+
+def test_preemptive_still_reports_a_real_exceedance():
+    """The guard must not hide genuine overflows under preemptive.
+
+    One tow has to clear the hold on its own, or the 0.8 trigger fires first
+    and there is no exceedance left to report. 260 > 250 does it; 200 does not,
+    because 200 is exactly the trigger.
+    """
+    catch = np.full(581, 260.0)        # one tow alone clears the 250 hold
+    result = evaluate_single_realisation(
+        make_trips(), make_instance(), catch, time_matrix=make_time_matrix(),
+        strategy="preemptive", preemptive_threshold=0.8)
+
+    assert any(not e["preemptive"] for e in result["overflow_events"])
+    assert result["capacity_exceeded"] is True
+
+
+# ---------------------------------------------------------------------------
+# Which end of the tow does a strategy leave from?
+# ---------------------------------------------------------------------------
+
+def _tow_geometry():
+    """A tow whose two ends have different nearest ports.
+
+    make_time_matrix is flat, so entry and exit are equidistant from every
+    port and no flat fixture can tell the two apart. Station 1 is nodes 15
+    (entry) and 16 (exit); port 3 is close to the entry, port 4 to the exit.
+    """
+    tm = make_time_matrix()
+    tm[15, 3] = tm[3, 15] = 1.0        # entry end is 1.0 from port 3
+    tm[16, 4] = tm[4, 16] = 2.0        # exit end is 2.0 from port 4
+    return tm
+
+
+def _overflow_on_station_1():
+    """Catch that fills the hold exactly at station 1 of trip 0."""
+    catch = np.zeros(581)
+    catch[0] = 150.0
+    catch[1] = 150.0                   # 300 > 250 capacity
+    return catch
+
+
+def test_forward_diverts_from_the_tow_exit():
+    """Forward tows the station, so it leaves from the far end.
+
+    Catching this needs a matrix where the two ends differ; with a flat one
+    the bug is invisible, which is how it survived.
+    """
+    r = evaluate_single_realisation(
+        make_trips(), make_instance(), _overflow_on_station_1(),
+        time_matrix=_tow_geometry(), strategy="forward")
+    e = r["overflow_events"][0]
+    assert e["station_node"] == 16, (
+        f"forward should divert from the exit node 16, got {e['station_node']}")
+    assert e["nearest_port"] == 4, (
+        "port 4 is nearest the exit; port 3 is nearest the entry")
+
+
+def test_backtrack_diverts_from_the_tow_entry():
+    """Backtrack has NOT towed the station, so the entry is correct here."""
+    r = evaluate_single_realisation(
+        make_trips(), make_instance(), _overflow_on_station_1(),
+        time_matrix=_tow_geometry(), strategy="backtrack")
+    e = r["overflow_events"][0]
+    assert e["station_node"] == 15, (
+        f"backtrack should divert from the entry node 15, "
+        f"got {e['station_node']}")
+    assert e["nearest_port"] == 3
+    assert e["detour_time"] == 2.0, "out and back to the same spot: 2 x 1.0"
+
+
+def test_repair_prices_the_diversion_from_where_it_sailed():
+    """Repair's prefix ends at the exit, so its leg must start there too."""
+    r = evaluate_single_realisation(
+        make_trips(), make_instance(), _overflow_on_station_1(),
+        time_matrix=_tow_geometry(), strategy="repair", repair_scope="trip")
+    e = r["overflow_events"][0]
+    assert e["station_node"] == 16
+    assert e["detour_time"] == 2.0, (
+        "the leg is exit -> port 4 = 2.0; charging the entry would give 1.0 "
+        "and bill the boat from an end it is not at")
+
+
+# ---------------------------------------------------------------------------
+# Does the time charged equal the route sailed?
+# ---------------------------------------------------------------------------
+#
+# The strongest check available, because it needs no knowledge of the right
+# answer -- it only asks the evaluator to agree with itself. The entry/exit
+# defect of 2026-10-16 was exactly this disagreement: a route walked to the
+# tow's exit, a time billed from its entry. Run on the geometry fixture, since
+# a flat matrix cannot tell the two ends apart.
+
+def _walk(nodes, tm):
+    return sum(tm[a, b] for a, b in zip(nodes, nodes[1:]))
+
+
+def test_forward_charges_exactly_the_route_it_sails():
+    """Forward tows the station, then calls at a port before the next one."""
+    tm = _tow_geometry()
+    trips = make_trips()
+    r = evaluate_single_realisation(
+        trips, make_instance(), _overflow_on_station_1(),
+        time_matrix=tm, strategy="forward")
+
+    nodes = trips[0]["nodes"]
+    port = r["overflow_events"][0]["nearest_port"]
+    # station 1 is nodes[3:5]; the port call goes after its exit
+    sailed = nodes[:5] + [port] + nodes[5:]
+
+    charged = r["trip_details"][0]["adjusted_time"]
+    assert charged == pytest.approx(_walk(sailed, tm)), (
+        f"forward charged {charged} for a route costing "
+        f"{_walk(sailed, tm)}")
+
+
+def test_backtrack_charges_exactly_the_route_it_sails():
+    """Backtrack reaches the station, turns back, then returns and tows it."""
+    tm = _tow_geometry()
+    trips = make_trips()
+    r = evaluate_single_realisation(
+        trips, make_instance(), _overflow_on_station_1(),
+        time_matrix=tm, strategy="backtrack")
+
+    nodes = trips[0]["nodes"]
+    port = r["overflow_events"][0]["nearest_port"]
+    # out and back from the entry, which is where it resumes
+    sailed = nodes[:4] + [port] + nodes[3:]
+
+    charged = r["trip_details"][0]["adjusted_time"]
+    assert charged == pytest.approx(_walk(sailed, tm)), (
+        f"backtrack charged {charged} for a route costing "
+        f"{_walk(sailed, tm)}")
+
+
+def test_repair_charges_exactly_the_routes_it_records():
+    """Repair records what it sailed, so the two must reconcile directly."""
+    tm = _tow_geometry()
+    trips = make_trips()
+    r = evaluate_single_realisation(
+        trips, make_instance(), _overflow_on_station_1(),
+        time_matrix=tm, strategy="repair", repair_scope="trip",
+        record_routes=True)
+
+    recorded = [leg for e in r["repaired_routes"] if e["trip_idx"] == 0
+                for leg in e["nodes"]]
+    assert recorded, "repair recorded no routes to reconcile against"
+
+    charged = r["trip_details"][0]["adjusted_time"]
+    assert charged == pytest.approx(sum(_walk(leg, tm) for leg in recorded)), (
+        f"repair charged {charged} for routes costing "
+        f"{sum(_walk(leg, tm) for leg in recorded)}")

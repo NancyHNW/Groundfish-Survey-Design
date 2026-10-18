@@ -315,3 +315,38 @@ def test_monte_carlo_all_overflow():
     print("PASS: Monte Carlo all overflow\n")
 
 
+def test_station_port_times():
+    """Nearest-port time per station, best of the tow's two ends."""
+    from unified.stochastic_eval import station_port_times
+
+    inst = make_fake_instance()
+    tm = make_fake_time_matrix()          # everything 5.0
+    # Station 2 is nodes 17/18. Put port 3 close to node 18 only, so taking
+    # the min over both ends is the only way to see it.
+    tm[18, 3] = tm[3, 18] = 1.5
+    # Station 4 (nodes 21/22) gets a near port on its first end.
+    tm[21, 7] = tm[7, 21] = 0.4
+
+    out = station_port_times(inst, tm)
+
+    assert set(out) == {0, 1, 2, 3, 4}
+    assert out[0] == 5.0, "no near port, so the flat 5.0"
+    assert out[2] == 1.5, "must check the far end of the tow too"
+    assert out[4] == 0.4
+    print("PASS: station_port_times\n")
+
+
+def test_station_port_times_ignores_non_ports():
+    """Only instance.port_ids count, not whatever else is near."""
+    from unified.stochastic_eval import station_port_times
+
+    inst = make_fake_instance()
+    tm = make_fake_time_matrix()
+    # A neighbouring station node, not a port. Must not be picked up.
+    tm[13, 19] = tm[19, 13] = 0.1
+
+    out = station_port_times(inst, tm)
+    assert out[0] == 5.0, "station 19 is not a port"
+    print("PASS: station_port_times ignores non-ports\n")
+
+

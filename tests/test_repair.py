@@ -563,3 +563,177 @@ def test_solver_beats_nearest_neighbour_on_routing():
     nn_time = sum(_leg_time(s["nodes"], tm) for s in nn)
     sol_time = sum(_leg_time(s["nodes"], tm) for s in sol)
     assert sol_time < nn_time
+
+
+# ---- keep_order re-planner ------------------------------------------------
+
+def test_keep_order_preserves_the_planned_sequence():
+    """The whole point: the order is tabu's output and must survive."""
+    from unified.stochastic_eval import _keep_order_resplit
+    tm = make_time_matrix()
+    stations = [5, 2, 9, 1, 7]
+    plan = _keep_order_resplit(0, stations, np.full(581, 100.0), 250.0, 0,
+                               tm, 1000.0)
+    assert [s for sub in plan for s in sub["stations"]] == stations
+
+
+def test_keep_order_still_respects_capacity():
+    from unified.stochastic_eval import _keep_order_resplit
+    tm = make_time_matrix()
+    belief = np.full(581, 100.0)
+    plan = _keep_order_resplit(0, list(range(8)), belief, 250.0, 0, tm, 1e9)
+    for sub in plan:
+        if len(sub["stations"]) > 1:
+            assert sum(belief[s] for s in sub["stations"]) <= 250.0
+
+
+def test_keep_order_respects_the_fish_time_limit():
+    from unified.stochastic_eval import _keep_order_resplit
+    tm = make_time_matrix(travel=5.0)
+    plan = _keep_order_resplit(0, list(range(8)), np.full(581, 1.0), 1e9, 0,
+                               tm, fish_time_limit=30.0)
+    for sub in plan:
+        if len(sub["stations"]) > 1:
+            assert _leg_time(sub["nodes"][1:], tm) <= 30.0
+
+
+def test_keep_order_starts_and_ends_where_asked():
+    from unified.stochastic_eval import _keep_order_resplit
+    tm = make_time_matrix()
+    plan = _keep_order_resplit(5, [0, 1, 2, 3], np.full(581, 100.0), 250.0,
+                               3, tm, 1000.0)
+    assert plan[0]["nodes"][0] == 5
+    assert all(sub["nodes"][-1] == 3 for sub in plan)
+
+
+def test_keep_order_differs_from_nearest_neighbour():
+    """If they agreed there would be no routing tax to avoid."""
+    from unified.stochastic_eval import _keep_order_resplit
+    tm = make_time_matrix(travel=5.0)
+    rng = np.random.default_rng(3)
+    tm = tm + rng.uniform(0, 20, tm.shape)
+    tm = (tm + tm.T) / 2
+    np.fill_diagonal(tm, 0.0)
+
+    stations = [5, 2, 9, 1, 7, 3]
+    keep = _keep_order_resplit(0, stations, np.full(581, 1.0), 1e9, 0, tm, 1e9)
+    nn = _nn_resplit(0, stations, np.full(581, 1.0), 1e9, 0, tm, 1e9)
+    assert [s for sub in keep for s in sub["stations"]] != \
+        [s for sub in nn for s in sub["stations"]]
+
+
+def test_keep_order_runs_through_the_evaluator():
+    # 200 kg, not 90: at 90 the only overflow lands on a trip's last station,
+    # which leaves nothing to re-plan and so never exercises the re-planner.
+    result = run(np.full(581, 200.0), repair_planner="keep_order")
+    assert np.isfinite(result["total_time"])
+    assert result["n_repairs"] >= 1
+
+
+def test_last_station_overflow_still_sails_home():
+    """Nothing left to re-plan, but the boat is not where the trip ends.
+
+    Repair used to stop at the port it diverted to and call the trip done,
+    which quietly saved it the leg home. Masked by the shared fixture, where
+    the nearest port IS the end port and that leg costs nothing.
+    """
+    tm = np.full((1175, 1175), 10.0)
+    np.fill_diagonal(tm, 0.0)
+    tm[17, 5] = tm[5, 17] = 1.0        # station 2 sits next to port 5
+    tm[18, 5] = tm[5, 18] = 1.0
+    tm[5, 0] = tm[0, 5] = 40.0         # but port 5 is far from end port 0
+
+    trips = [{"boat_id": 0, "nodes": [0, 13, 14, 15, 16, 17, 18, 0],
+              "total_time": 70.0, "fish_time": 60.0, "catch": 300.0}]
+    catch = np.full(581, 50.0)
+    catch[0] = catch[1] = 100.0
+    catch[2] = 120.0                   # overflow on the last station
+
+    inst = make_instance()
+    inst.fish_time_limit = 1e9
+    got = evaluate_single_realisation(
+        trips, inst, catch, time_matrix=tm, strategy="repair",
+        repair_scope="trip")["trip_details"][0]["detour_time"]
+
+    # Sail to the diverted port, then on to where the trip was going to end,
+    # instead of the planned leg straight there.
+    assert got == pytest.approx(1.0 + 40.0 - 10.0)
+
+
+# ---- no cap by default ----------------------------------------------------
+
+def test_uncapped_terminates_when_every_station_overflows_alone():
+    """The cap is gone, so termination has to come from the loop itself.
+
+    Each overflow station is landed, so `remaining` shrinks every pass. If that
+    ever stops being true this hangs instead of failing, which is the point.
+    """
+    result = run(np.full(581, 1e6))
+    assert result["repair_cap_hit"] is False
+    assert np.isfinite(result["total_time"])
+    # one repair per station, not more
+    assert result["n_repairs"] <= len(stations_of(make_trips()[0]["nodes"]))
+
+
+def test_uncapped_still_visits_every_station_once():
+    catch = np.full(581, 130.0)
+    record = evaluate_single_realisation(
+        make_trips(), make_instance(), catch,
+        time_matrix=make_time_matrix(), strategy="repair",
+        record_routes=True)
+    # "nodes" is a list of node sequences, one per leg actually sailed
+    sailed = [s for r in record["repaired_routes"]
+              for leg in r["nodes"] for s in stations_of(leg)]
+    planned = [s for t in make_trips() for s in stations_of(t["nodes"])]
+    assert sorted(set(sailed)) == sorted(set(planned))
+
+
+def test_a_cap_still_binds_when_asked_for():
+    """Explicit caps are kept, so the fallback path stays testable."""
+    assert run(np.full(581, 1e6), max_repairs=1)["repair_cap_hit"] is True
+
+
+def test_uncapped_is_never_worse_than_capped():
+    """Past the cap the rest is sailed on backtrack detours, which is worse."""
+    catch = np.full(581, 130.0)
+    assert (run(catch)["total_time"]
+            <= run(catch, max_repairs=1)["total_time"] + 1e-9)
+
+
+# ---- tabu re-planner ------------------------------------------------------
+
+@pytest.mark.slow
+def test_tabu_beats_greedy_plus_tsp_on_a_sub_problem():
+    """Why `tabu` exists: it moves stations between the boat's own trips.
+
+    Greedy fixes the split and the TSP only reorders inside it, so the one
+    decision an overflow actually invalidates goes unoptimised.
+    """
+    stations = list(range(40, 90))
+    kw = dict(planned_catch=np.full(581, 800.0), capacity=14000.0,
+              end_port=0, port_nodes=list(range(13)), fish_time_limit=120.0)
+    greedy = _solver_resplit(0, stations, **kw)
+    tabu = _solver_resplit(0, stations, search="tabu_move", **kw)
+
+    from unified.evaluate import _load_time_matrix
+    tm = _load_time_matrix()
+    cost = lambda p: sum(_leg_time(t["nodes"], tm) for t in p)
+    assert cost(tabu) < cost(greedy)
+
+
+@pytest.mark.slow
+def test_tabu_covers_every_station_once():
+    stations = list(range(40, 70))
+    plan = _solver_resplit(0, stations, planned_catch=np.full(581, 800.0),
+                           capacity=14000.0, end_port=0,
+                           port_nodes=list(range(13)), fish_time_limit=120.0,
+                           search="tabu_move")
+    seen = [s for sub in plan for s in sub["stations"]]
+    assert sorted(seen) == sorted(stations)
+    assert len(seen) == len(set(seen))
+
+
+@pytest.mark.slow
+def test_tabu_planner_reaches_the_evaluator():
+    from unified.stochastic_eval import REPAIR_PLANNERS
+    assert "tabu" in REPAIR_PLANNERS

@@ -209,14 +209,15 @@ def test_realised_time_is_never_below_planned(solved, scenarios, strategy):
 def test_fishing_time_limit_has_little_slack(solved):
     """Documents how tight the fishing time limit is, rather than asserting it.
 
-    fish_time_limit=120 and work_limit=150 are hardcoded defaults in
+    fish_time_limit=120 and work_limit=160 are hardcoded defaults in
     load_gfsp_full_problem's signature, not read from full_problem.txt the way
     the subproblem values come from the gfsp formulas. The best trip lands
     around 119.3 h against the 120 h limit -- feasible by well under an hour.
 
-    Those two numbers are load-bearing and unvalidated. This test fails if the
-    slack changes materially, which is the signal to go and check them rather
-    than to adjust the number here.
+    Both now match Saahil's test_problem00, the instance with the real unequal
+    fleet. The freshness limit is load-bearing and has almost no slack, so this
+    test fails if that changes materially -- the signal to go and check it
+    rather than to adjust the number here.
     """
     limit = solved["instance"].fish_time_limit
     slack = limit - solved["worst_fish_time"]
