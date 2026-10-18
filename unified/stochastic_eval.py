@@ -5,6 +5,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from matplotlib.patches import Patch
 from .problem import ProblemInstance, N_PORTS
 from .evaluate import _load_time_matrix
 
@@ -34,7 +35,7 @@ def _extract_station_ordinals(trip_nodes):
 def evaluate_single_realisation(solution_trips, instance, catch_vector,
                                 time_matrix=None, strategy="backtrack",
                                 preemptive_threshold=0.8, planned_catch=None,
-                                max_repairs=10, repair_scope="trip",
+                                max_repairs=None, repair_scope="trip",
                                 repair_planner="nn",
                                 repair_solver_time=0.0, record_routes=False):
     """Evaluate a routing solution under one catch realisation.
@@ -67,10 +68,12 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         Per-station catch the solver planned against, from solve(). Repair
         re-plans with it. Falls back to the trips' own average, which makes
         the re-planner cruder than the planner it is repairing.
-    max_repairs : int
-        Cap on re-plans per trip. Repair is re-simulated under the same
-        scenario so it can overflow again; past the cap the rest is sailed
-        charging backtrack detours. Default 10, against ~2 expected.
+    max_repairs : int or None
+        Cap on re-plans per trip, None for no cap (the default). Repair is
+        re-simulated under the same scenario so it can overflow again, but
+        each overflow station is landed, so `remaining` always shrinks and the
+        loop ends on its own. Set an int to pin the fallback path, which sails
+        the rest charging backtrack detours.
     repair_scope : str
         "trip" re-plans only the trip that overflowed; "boat" re-plans
         everything that boat has left, across all its remaining trips.
@@ -81,6 +84,8 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         - "2opt": nearest neighbour then 2-opt over each new trip
         - "solver": a one-boat sub-problem solved with the same greedy
           construction and TSP re-order the planner uses, ~1000x the cost
+        - "keep_order": keeps the planned station order and re-decides only
+          where the trips break, so no routing quality is discarded
         The re-planner must stay worse than the planner that built the original
         routes, or repair wins by re-optimising rather than by reacting.
     repair_solver_time : float
@@ -172,9 +177,15 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
         non_port = [n for n in nodes if n >= N_PORTS]
         station_ordinals = []
         station_nodes = []
+        station_exits = []
         for i in range(0, len(non_port), 2):
             station_ordinals.append(_node_to_station(non_port[i]))
+            # A station is a tow, so it has two ends. Which one a strategy
+            # diverts from depends on whether it towed the station first:
+            # backtrack has not (the catch would not fit) and leaves from the
+            # entry, everything else has and leaves from the exit.
             station_nodes.append(non_port[i])
+            station_exits.append(non_port[i + 1])
 
         if boat_deltas is not None:
             detour_time = boat_deltas[trip_idx]
@@ -182,7 +193,8 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
             record = [] if record_routes else None
             detour_time = _run_strategy(
                 strategy, preemptive_threshold,
-                station_ordinals, station_nodes, catch_vector, boat_capacity,
+                station_ordinals, station_nodes, station_exits,
+                catch_vector, boat_capacity,
                 port_nodes, time_matrix, trip_idx, boat_id, overflow_events,
                 trip=trip, planned_catch=planned_catch,
                 fish_time_limit=instance.fish_time_limit,
@@ -195,13 +207,24 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
                                         "trip_idx": trip_idx,
                                         "nodes": record})
 
+        # Every return, preemptive or not. A preemptive return is still a trip
+        # to port the plan did not have.
         trip_unscheduled = sum(
             1 for e in overflow_events if e["trip_idx"] == trip_idx
         )
-        # From the events, not the sign of the time change: repair re-routes
-        # and can come in under the plan, so a negative change is still an
-        # overflow that happened.
-        trip_exceeded = trip_unscheduled > 0
+        # Exceeding is NOT the same as returning. A preemptive return fires
+        # while the hold is explicitly still under capacity, so counting those
+        # here made P(exceed) read 100% for preemptive against 98.6% for
+        # everything else -- backwards, since returning early is what avoids
+        # exceeding.
+        #
+        # From the events rather than the sign of the time change: repair
+        # re-routes and can come in under the plan, so a negative change is
+        # still an overflow that happened.
+        trip_exceeded = any(
+            e["trip_idx"] == trip_idx and not e.get("preemptive", False)
+            for e in overflow_events
+        )
 
         # The planned fish time, even under repair, which replaced the route.
         # The re-split enforces the limit itself, so this reports the plan.
@@ -248,8 +271,8 @@ def evaluate_single_realisation(solution_trips, instance, catch_vector,
 # Strategy implementations
 # ---------------------------------------------------------------------------
 
-def _walk_backtrack(station_ordinals, station_nodes, catch_vector,
-                    boat_capacity, port_nodes, time_matrix,
+def _walk_backtrack(station_ordinals, station_nodes, station_exits,
+                    catch_vector, boat_capacity, port_nodes, time_matrix,
                     trip_idx, boat_id, overflow_events):
     """Original strategy: nearest port, then backtrack to tow the station.
 
@@ -278,6 +301,10 @@ def _walk_backtrack(station_ordinals, station_nodes, catch_vector,
     for i, stn in enumerate(station_ordinals):
         cumulative_catch += catch_vector[stn]
         if cumulative_catch > boat_capacity:
+            # Entry end, and that is right here: backtrack has NOT towed this
+            # station (its catch would not fit), so the boat turns for port
+            # from where it arrived and comes back to the same spot.
+            # station_exits is unused for that reason.
             stn_node = station_nodes[i]
             nearest_port, return_time = _find_nearest_port(
                 stn_node, port_nodes, time_matrix
@@ -305,8 +332,8 @@ def _walk_backtrack(station_ordinals, station_nodes, catch_vector,
     return detour_time
 
 
-def _walk_forward(station_ordinals, station_nodes, catch_vector,
-                  boat_capacity, port_nodes, time_matrix,
+def _walk_forward(station_ordinals, station_nodes, station_exits,
+                  catch_vector, boat_capacity, port_nodes, time_matrix,
                   trip_idx, boat_id, overflow_events, end_port):
     """Forward strategy: nearest port, then carry on to the next station
     instead of going back.
@@ -320,10 +347,15 @@ def _walk_forward(station_ordinals, station_nodes, catch_vector,
     and never fish it. `_walk_backtrack` takes the other reading, goes back,
     and tows it.
 
-    Because the catch is aboard, an overflow on a trip's **last** station costs
-    almost nothing -- the next thing in the route is the port the boat was
-    already heading for, so only which port differs. That case used to charge a
-    full out-and-back, copied from backtrack, for a journey never made.
+    At a trip's **last** station the next thing in the route is the end port
+    anyway, so only *which* port differs:
+
+        t(station -> diverted port) + t(diverted port -> end)
+                                    - t(station -> end)
+
+    exactly zero when the nearest port is the end port. Charging a full
+    out-and-back there, as backtrack correctly does, would bill forward for a
+    return journey it never makes.
     """
     cumulative_catch = 0.0
     detour_time = 0.0
@@ -332,7 +364,9 @@ def _walk_forward(station_ordinals, station_nodes, catch_vector,
     for i, stn in enumerate(station_ordinals):
         cumulative_catch += catch_vector[stn]
         if cumulative_catch > boat_capacity:
-            stn_node = station_nodes[i]
+            # The exit end: forward tows the station before diverting, so
+            # the boat is at the far end of the tow, not where it entered.
+            stn_node = station_exits[i]
             nearest_port, time_to_port = _find_nearest_port(
                 stn_node, port_nodes, time_matrix
             )
@@ -345,8 +379,10 @@ def _walk_forward(station_ordinals, station_nodes, catch_vector,
                                  time_matrix[nearest_port, next_node])
                 detour = via_port_time - direct_time
             else:
-                # Last station of the trip: the boat was sailing to its end
-                # port next, so only the change of port costs anything.
+                # Trip's last station. The boat was heading for the end port
+                # anyway, so it pays only the change of port -- not an
+                # out-and-back, which it never sails. Zero when the nearest
+                # port IS the end port.
                 detour = (time_to_port
                           + time_matrix[nearest_port, end_port]
                           - time_matrix[stn_node, end_port])
@@ -368,8 +404,9 @@ def _walk_forward(station_ordinals, station_nodes, catch_vector,
     return detour_time
 
 
-def _walk_preemptive(station_ordinals, station_nodes, catch_vector,
-                     boat_capacity, threshold, port_nodes, time_matrix,
+def _walk_preemptive(station_ordinals, station_nodes, station_exits,
+                     catch_vector, boat_capacity, threshold,
+                     port_nodes, time_matrix,
                      trip_idx, boat_id, overflow_events):
     """Preemptive strategy: return to port when load reaches threshold
     fraction of capacity, before overflow actually happens.
@@ -388,7 +425,9 @@ def _walk_preemptive(station_ordinals, station_nodes, catch_vector,
         preemptive = (not exceeded) and (cumulative_catch >= trigger_level)
 
         if exceeded or preemptive:
-            stn_node = station_nodes[i]
+            # Counted this station's catch and lands it, so it was towed:
+            # the boat turns for port from the exit end.
+            stn_node = station_exits[i]
             nearest_port, return_time = _find_nearest_port(
                 stn_node, port_nodes, time_matrix
             )
@@ -539,14 +578,94 @@ def _sub_feasible(prob, capacity, fish_time_limit):
                for boat in prob.boats for trip in boat.route)
 
 
+def _keep_order_resplit(start_port, stations, planned_catch, capacity,
+                       end_port, time_matrix, fish_time_limit):
+    """Re-split `stations` from `start_port` WITHOUT re-ordering them.
+
+    The station order came out of tabu search over the whole trip. Nearest
+    neighbour throws it away and rebuilds greedily, which is measurably worse
+    routing -- that routing tax is why repair trails forward, and why boat
+    scope is a disaster.
+
+    This keeps the planned sequence and re-decides only where the trips break,
+    which is the decision an overflow actually invalidates. Routing quality is
+    preserved by construction; the only gain over `forward` is a better first
+    leg out of the port the boat diverted to.
+
+    Orientation is chosen per station as in _nn_resplit, since which end the
+    boat enters is a routing choice the order does not fix.
+    """
+    stations = [int(x) for x in stations]
+    if not stations:
+        return []
+
+    trips = []
+    depart = start_port
+    i = 0
+    while i < len(stations):
+        route = [depart]
+        taken = []
+        load = 0.0
+
+        while i < len(stations):
+            stn = stations[i]
+            a, b = N_PORTS + 2 * stn, N_PORTS + 2 * stn + 1
+            here = route[-1]
+            entry, exit_ = (a, b) if time_matrix[here, a] <= time_matrix[here, b]                 else (b, a)
+
+            # First station of a trip is always accepted, as in _nn_resplit:
+            # refusing it when one station alone breaks a limit never closes.
+            if taken:
+                if load + planned_catch[stn] > capacity:
+                    break
+                trial = route + [int(entry), int(exit_), end_port]
+                if _leg_time(trial[1:], time_matrix) > fish_time_limit:
+                    break
+
+            route.extend((int(entry), int(exit_)))
+            taken.append(stn)
+            load += planned_catch[stn]
+            i += 1
+
+        route.append(end_port)
+        trips.append({"nodes": route, "stations": taken})
+        depart = end_port
+
+    return trips
+
+
+# Searches the sub-problem can run, filled on first use -- they only import
+# with final_code on sys.path.
+_SUB_SEARCHES = {}
+
+
+def _load_sub_searches():
+    if _SUB_SEARCHES:
+        return
+    from .adapters import heuristic_context
+    with heuristic_context():
+        from neighbourhood_rules import (tabu_search_combined,
+                                         tabu_search_move, tabu_search_swap)
+    _SUB_SEARCHES.update(tabu_move=tabu_search_move,
+                         tabu_swap=tabu_search_swap,
+                         tabu_combined=tabu_search_combined)
+
+
 def _solver_resplit(start_port, stations, planned_catch, capacity, end_port,
-                    port_nodes, fish_time_limit, solver_time=0.0, seed=0):
+                    port_nodes, fish_time_limit, solver_time=0.0, seed=0,
+                    search=None):
     """Re-plan with the heuristic that built the original routes.
 
     A one-boat sub-problem over the remaining stations, based at the port the
     boat diverted to, solved with the same greedy construction and Gurobi TSP
     re-order the planner uses. Restarts until solver_time is spent, keeping the
     best.
+
+    `search="tabu_move"` runs tabu on top, which moves stations between the
+    boat's own trips -- the decision an overflow actually invalidates. Worth
+    about -15% on a 60-station sub-problem for roughly 2x the time. Note this
+    makes the re-planner the *same* search as the planner, so repair's gain
+    then mixes reacting with re-optimising.
 
     Measured ~0.2 s for 150 stations against ~0.06 ms for _nn_resplit, so a few
     thousand times the cost. For single-solve comparisons, not a 30-instance
@@ -565,6 +684,8 @@ def _solver_resplit(start_port, stations, planned_catch, capacity, end_port,
     from .adapters import heuristic_context, override_catch_data
     from .evaluate import solution_to_trips
 
+    _load_sub_searches()
+
     nodes = [n for s in stations
              for n in (N_PORTS + 2 * s, N_PORTS + 2 * s + 1)]
 
@@ -578,11 +699,28 @@ def _solver_resplit(start_port, stations, planned_catch, capacity, end_port,
         override_catch_data(prob,
                             catch_array=np.asarray(planned_catch, dtype=float))
 
+        # A boat left with one trip has nowhere to move stations to, so tabu
+        # needs an empty second trip -- same fix solve.py applies.
+        def _polish():
+            for boat in prob.boats:
+                boat.improve_route(prob)
+            if search:
+                from classes import Trip
+                for boat in prob.boats:
+                    if len(boat.route) == 1:
+                        boat.route.append(Trip(boat.home_port, [],
+                                               boat.home_port))
+                _SUB_SEARCHES[search](prob, 1000, 1000, np.inf,
+                                      len(stations) + 1,
+                                      history_size=max(1, len(stations) // 10),
+                                      max_iter=10, max_time=30, tsp=0.02)
+                for boat in prob.boats:
+                    boat.improve_route(prob)
+
         # Greedy first: deterministic, and it always respects the limits, so
         # there is always a feasible answer to fall back on.
         prob.generate_initial_solution(seed=seed)
-        for boat in prob.boats:
-            boat.improve_route(prob)
+        _polish()
         best_obj = sum(boat.total_time for boat in prob.boats)
         best_sol = prob.save_solution_as_list()
 
@@ -594,8 +732,7 @@ def _solver_resplit(start_port, stations, planned_catch, capacity, end_port,
             it += 1
             prob.reset()
             prob.GRASP(rcl_size=2, seed=seed + it)
-            for boat in prob.boats:
-                boat.improve_route(prob)
+            _polish()
             if not _sub_feasible(prob, capacity, fish_time_limit):
                 continue
             obj = sum(boat.total_time for boat in prob.boats)
@@ -621,7 +758,7 @@ def _solver_resplit(start_port, stations, planned_catch, capacity, end_port,
 # What repair re-plans with. One knob, not a planner plus a refinement flag --
 # they are three points on one axis of "how good is the re-planner", and the
 # combinations that a separate flag allows are meaningless.
-REPAIR_PLANNERS = ("nn", "2opt", "solver")
+REPAIR_PLANNERS = ("nn", "2opt", "solver", "keep_order", "tabu")
 
 # How much repair re-plans. The CLIs read their choices from this.
 REPAIR_SCOPES = ("trip", "boat")
@@ -630,10 +767,15 @@ REPAIR_SCOPES = ("trip", "boat")
 def _replan(planner, start_port, stations, planned_catch, capacity, end_port,
             port_nodes, time_matrix, fish_time_limit, solver_time):
     """Pick a re-planner. One place, so every caller stays the same."""
-    if planner == "solver":
+    if planner in ("solver", "tabu"):
         return _solver_resplit(start_port, stations, planned_catch, capacity,
                                end_port, port_nodes, fish_time_limit,
-                               solver_time)
+                               solver_time,
+                               search="tabu_move" if planner == "tabu" else None)
+    if planner == "keep_order":
+        return _keep_order_resplit(start_port, stations, planned_catch,
+                                   capacity, end_port, time_matrix,
+                                   fish_time_limit)
     return _nn_resplit(start_port, stations, planned_catch, capacity, end_port,
                        time_matrix, fish_time_limit, two_opt=planner == "2opt")
 
@@ -654,8 +796,11 @@ def _sail(trips, catch_vector, capacity, port_nodes, time_matrix, record=None):
         for i, stn in enumerate(trip["stations"]):
             load += catch_vector[stn]
             if load > capacity:
-                entry = nodes[2 * i + 1]
-                port, leg = _find_nearest_port(entry, port_nodes, time_matrix)
+                # Exit end: the prefix below tows this station, so the boat
+                # is at the far end of the tow when it turns for port.
+                exit_node = nodes[2 * i + 2]
+                port, leg = _find_nearest_port(exit_node, port_nodes,
+                                               time_matrix)
                 accrued += _leg_time(nodes[:2 * i + 3], time_matrix) + leg
                 if record is not None:
                     record.append([int(n) for n in nodes[:2 * i + 3]]
@@ -663,7 +808,7 @@ def _sail(trips, catch_vector, capacity, port_nodes, time_matrix, record=None):
                 rest = list(trip["stations"][i + 1:])
                 for later in trips[t + 1:]:
                     rest.extend(later["stations"])
-                return accrued, port, rest, (stn, entry, load, port, leg)
+                return accrued, port, rest, (stn, exit_node, load, port, leg)
         accrued += _leg_time(nodes, time_matrix)
         if record is not None:
             record.append([int(n) for n in nodes])
@@ -718,7 +863,7 @@ def _repair_remainder(start_port, remaining, end_port, catch_vector, capacity,
     port = start_port
     n_repairs = 0
 
-    while remaining and n_repairs < max_repairs:
+    while remaining and (max_repairs is None or n_repairs < max_repairs):
         n_repairs += 1
         plan = _replan(planner, port, remaining, planned_catch, capacity,
                        end_port, port_nodes, time_matrix, fish_time_limit,
@@ -795,12 +940,13 @@ def _repair_by_boat(solution_trips, capacities, catch_vector, port_nodes,
         nodes = solution_trips[idx]["nodes"]
         record = [] if records is not None else None
 
-        entry = nodes[2 * i + 1]
-        port, leg = _find_nearest_port(entry, port_nodes, time_matrix)
+        # Exit end, matching the prefix below, which ends at the tow's exit.
+        exit_node = nodes[2 * i + 2]
+        port, leg = _find_nearest_port(exit_node, port_nodes, time_matrix)
         realised = _leg_time(nodes[:2 * i + 3], time_matrix) + leg
         overflow_events.append({
             "trip_idx": idx, "boat_id": boat_id, "station_ordinal": stn,
-            "station_node": entry, "cumulative_catch": load,
+            "station_node": exit_node, "cumulative_catch": load,
             "capacity": capacity, "nearest_port": port, "detour_time": leg,
         })
         if record is not None:
@@ -811,11 +957,17 @@ def _repair_by_boat(solution_trips, capacities, catch_vector, port_nodes,
             remaining.extend(
                 _extract_station_ordinals(solution_trips[later]["nodes"]))
 
-        realised += _repair_remainder(
-            port, remaining, end_port, catch_vector, capacity, planned_catch,
-            port_nodes, time_matrix, fish_time_limit, max_repairs, idx,
-            boat_id, overflow_events, stats, record, planner,
-            solver_time)
+        if remaining:
+            realised += _repair_remainder(
+                port, remaining, end_port, catch_vector, capacity,
+                planned_catch, port_nodes, time_matrix, fish_time_limit,
+                max_repairs, idx, boat_id, overflow_events, stats, record,
+                planner, solver_time)
+        else:
+            # Same as trip scope: the boat still has to get home.
+            realised += time_matrix[port, end_port]
+            if record is not None:
+                record.append([int(port), int(end_port)])
 
         deltas[idx] = realised - solution_trips[idx]["total_time"]
         for later in idxs[pos + 1:]:
@@ -828,7 +980,8 @@ def _repair_by_boat(solution_trips, capacities, catch_vector, port_nodes,
     return deltas
 
 
-def _walk_repair(station_ordinals, station_nodes, catch_vector, boat_capacity,
+def _walk_repair(station_ordinals, station_nodes, station_exits,
+                 catch_vector, boat_capacity,
                  port_nodes, time_matrix, trip_idx, boat_id, overflow_events,
                  nodes, planned_catch, fish_time_limit, planned_time,
                  max_repairs, stats, record=None, planner="nn",
@@ -855,24 +1008,34 @@ def _walk_repair(station_ordinals, station_nodes, catch_vector, boat_capacity,
     else:
         return 0.0                      # no overflow, the plan stands
 
-    # Priced from the same node backtrack uses, so the comparison against it is
-    # the re-planning rule alone and not a change of convention.
-    entry = station_nodes[i]
-    port, leg = _find_nearest_port(entry, port_nodes, time_matrix)
+    # The prefix below ends at the tow's exit, so the diversion has to be
+    # priced from the exit as well. Measuring it from the entry sails the boat
+    # to one end of the tow and bills it from the other.
+    exit_node = station_exits[i]
+    port, leg = _find_nearest_port(exit_node, port_nodes, time_matrix)
     realised = _leg_time(nodes[:2 * i + 3], time_matrix) + leg
     overflow_events.append({
         "trip_idx": trip_idx, "boat_id": boat_id, "station_ordinal": stn,
-        "station_node": entry, "cumulative_catch": load,
+        "station_node": exit_node, "cumulative_catch": load,
         "capacity": boat_capacity, "nearest_port": port, "detour_time": leg,
     })
     if record is not None:
         record.append([int(n) for n in nodes[:2 * i + 3]] + [int(port)])
 
-    realised += _repair_remainder(
-        port, list(station_ordinals[i + 1:]), end_port, catch_vector,
-        boat_capacity, planned_catch, port_nodes, time_matrix,
-        fish_time_limit, max_repairs, trip_idx, boat_id, overflow_events,
-        stats, record, planner, solver_time)
+    remaining = list(station_ordinals[i + 1:])
+    if remaining:
+        realised += _repair_remainder(
+            port, remaining, end_port, catch_vector, boat_capacity,
+            planned_catch, port_nodes, time_matrix, fish_time_limit,
+            max_repairs, trip_idx, boat_id, overflow_events, stats, record,
+            planner, solver_time)
+    else:
+        # Nothing left to re-plan, but the boat is at the port it diverted to
+        # and the trip was going to finish somewhere else. It still has to sail
+        # there, or the next planned trip starts from the wrong place.
+        realised += time_matrix[port, end_port]
+        if record is not None:
+            record.append([int(port), int(end_port)])
 
     return realised - planned_time
 
@@ -897,9 +1060,10 @@ DETOUR_STRATEGIES = ("backtrack", "forward", "preemptive")
 
 
 def _run_strategy(strategy, preemptive_threshold, station_ordinals,
-                  station_nodes, catch_vector, boat_capacity, port_nodes,
+                  station_nodes, station_exits, catch_vector,
+                  boat_capacity, port_nodes,
                   time_matrix, trip_idx, boat_id, overflow_events, trip=None,
-                  planned_catch=None, fish_time_limit=None, max_repairs=10,
+                  planned_catch=None, fish_time_limit=None, max_repairs=None,
                   stats=None, record=None, planner="nn",
                   solver_time=0.0):
     """Walk one trip under strategy, returning the change to its planned time.
@@ -909,7 +1073,8 @@ def _run_strategy(strategy, preemptive_threshold, station_ordinals,
     solver planned against, and it may return less than zero.
     """
     walk = STRATEGIES[strategy]
-    head = (station_ordinals, station_nodes, catch_vector, boat_capacity)
+    head = (station_ordinals, station_nodes, station_exits, catch_vector,
+            boat_capacity)
     tail = (port_nodes, time_matrix, trip_idx, boat_id, overflow_events)
 
     if strategy == "preemptive":
@@ -979,7 +1144,7 @@ class StochasticEvaluator:
 
     def evaluate(self, solution_trips, instance, strategy="backtrack",
                  preemptive_threshold=0.8, planned_catch=None,
-                 max_repairs=10, repair_scope="trip",
+                 max_repairs=None, repair_scope="trip",
                  repair_planner="nn", repair_solver_time=0.0):
         """Run n_simulations catch realisations against the fixed route.
 
@@ -1290,7 +1455,9 @@ def plot_sweep_grid(rows, save_path=None, title_suffix=None):
     cases = list(dict.fromkeys(r["case"] for r in rows))  # keeps sweep order
     x = [b * 100 for b in buffers]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    # The sweep can contain many strategies whose lines are close together.
+    # Extra height gives those differences room without changing the data scale.
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 10))
 
     # Planned time is the floor every strategy is measured against, so it is a
     # reference line rather than a fifth series -- hence grey and dashed.
@@ -1349,12 +1516,14 @@ def plot_sweep_grid(rows, save_path=None, title_suffix=None):
                   f"{best['buffer']:.0%}, {best['mean']:.0f}h)", fontsize=10)
     ax1.set_xlabel("Planning buffer (% of true capacity)")
     ax1.set_ylabel("Survey time (hours)")
-    ax1.legend(fontsize=8, loc="best")
+    ax1.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0),
+               borderaxespad=0)
 
     ax2.set_title("Unscheduled returns per trip", fontsize=10)
     ax2.set_xlabel("Planning buffer (% of true capacity)")
     ax2.set_ylabel("Returns per trip")
-    ax2.legend(fontsize=8, loc="best")
+    ax2.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1.0),
+               borderaxespad=0)
 
     for ax in (ax1, ax2):
         ax.set_xticks(x)
@@ -1854,6 +2023,316 @@ def plot_time_comparison(solution_trips, result, save_path=None):
                  fontsize=12, fontweight="bold", color="white")
 
     plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=200)
+        print(f"Saved plot to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Where overflows happen
+# ---------------------------------------------------------------------------
+
+# Magnitude, not identity, so a sequential single hue rather than the
+# categorical strategy palette. Light-to-dark on one hue: rare stations recede,
+# costly ones read immediately, and it survives greyscale and colour blindness
+# without needing the adjacent-pair checks a categorical set does.
+_HEAT = "Blues"
+
+
+def overflow_profile(result, solution_trips, time_matrix=None):
+    """Aggregate overflow events across scenarios.
+
+    The evaluator records where every overflow happened and what it cost, then
+    nothing reads it. This turns that into per-station and per-boat summaries.
+
+    Returns a dict of:
+      stations   {ordinal: {"rate", "hours", "mean_cost", "port_time",
+                             "boat_hours"}}
+      positions  list of i/n, where in its trip each overflow fell
+      boats      {boat_id: {"rate", "hours"}}
+      trips      list per planned trip: {"boat", "n_stations", "p_overflow",
+                 "hours", "mean_position"}
+    """
+    if time_matrix is None:
+        time_matrix = _load_time_matrix()
+
+    runs = result["all_results"]
+    n = len(runs)
+    trip_stations = [_extract_station_ordinals(t["nodes"])
+                     for t in solution_trips]
+
+    stations, boats, positions = {}, {}, []
+    trips = [{"boat": t["boat_id"], "n_stations": len(st), "count": 0,
+              "scenarios_hit": 0, "hours": 0.0, "positions": []}
+             for t, st in zip(solution_trips, trip_stations)]
+
+    for run in runs:
+        # Binary per scenario: a trip that overflows twice still counts once,
+        # so this reads as "how often is this trip fragil e", not how much
+        # trouble it causes. The hours column is what carries the cost.
+        for i, td in enumerate(run["trip_details"]):
+            if td["exceeded"]:
+                trips[i]["scenarios_hit"] += 1
+
+        for e in run["overflow_events"]:
+            trips[e["trip_idx"]]["hours"] += float(e["detour_time"])
+            trips[e["trip_idx"]]["count"] += 1
+            stn = int(e["station_ordinal"])
+            s = stations.setdefault(stn, {"count": 0, "hours": 0.0,
+                                          "port_time": 0.0, "boat_hours": {}})
+            s["count"] += 1
+            s["hours"] += float(e["detour_time"])
+            boat_hours = s["boat_hours"]
+            boat_hours[e["boat_id"]] = (
+                boat_hours.get(e["boat_id"], 0.0)
+                + float(e["detour_time"]))
+            # Accumulated, not assigned: a tow is enterable from either end, so
+            # the exit node -- and the port time with it -- varies by scenario.
+            s["port_time"] += float(time_matrix[e["station_node"],
+                                                e["nearest_port"]])
+
+            b = boats.setdefault(e["boat_id"], {"count": 0, "hours": 0.0})
+            b["count"] += 1
+            b["hours"] += float(e["detour_time"])
+
+            # Where in its trip did it fall? Repair re-plans, so its later
+            # overflows are on routes no planned trip describes -- those are
+            # skipped rather than mapped onto a trip they did not happen in.
+            planned = trip_stations[e["trip_idx"]]
+            if stn in planned and len(planned) > 1:
+                where = planned.index(stn) / (len(planned) - 1)
+                positions.append(where)
+                trips[e["trip_idx"]]["positions"].append(where)
+
+    for s in stations.values():
+        s["rate"] = s["count"] / n
+        s["mean_cost"] = s["hours"] / s["count"]
+        s["port_time"] /= s["count"]
+        s["hours"] /= n
+    for b in boats.values():
+        b["rate"] = b["count"] / n
+        b["hours"] /= n
+    for t in trips:
+        t["p_overflow"] = t["scenarios_hit"] / n
+        t["hours"] /= n
+        t["mean_position"] = (sum(t["positions"]) / len(t["positions"])
+                              if t["positions"] else float("nan"))
+        del t["positions"], t["scenarios_hit"]
+
+    return {"stations": stations, "positions": positions, "boats": boats,
+            "trips": trips, "trip_stations": trip_stations, "n_scenarios": n}
+
+
+def station_port_times(instance, time_matrix=None):
+    """Time to the nearest port from every station, best of its two ends.
+
+    The baseline the overflow stations get compared against. An overflow costs
+    roughly twice this, so if the stations that overflow sit further from port
+    than the survey average, the planner is not tapering its trips towards
+    port and there is something to win by making it.
+
+    Returns {ordinal: hours}.
+    """
+    if time_matrix is None:
+        time_matrix = _load_time_matrix()
+    ports = np.asarray(instance.port_ids, dtype=int)
+
+    out = {}
+    for s in instance.station_ids:
+        s = int(s)
+        n1, n2 = N_PORTS + 2 * s, N_PORTS + 2 * s + 1
+        out[s] = float(min(time_matrix[n1, ports].min(),
+                           time_matrix[n2, ports].min()))
+    return out
+
+
+def plot_overflow_map(profile, instance, save_path=None, title_suffix=None):
+    """Where overflows cost time, on the map.
+
+    Marker size encodes expected hours lost per season. Marker colour identifies
+    the boat contributing the most detour time at each station.
+    """
+    nodes, n_ports, _ = _load_nodes()
+    island = _load_island()
+    stations = profile["stations"]
+
+    fig, ax = plt.subplots(figsize=(13, 9))
+    _draw_base_map(ax, nodes, n_ports, island, instance)
+
+    if not stations:
+        ax.set_title("No overflows recorded")
+        _finish_map(fig, ax, save_path, title_suffix)
+        return
+
+    ords = sorted(stations, key=lambda s: stations[s]["hours"])
+    lats, lons, hours, boats = [], [], [], []
+    for s in ords:
+        a, b = N_PORTS + 2 * s, N_PORTS + 2 * s + 1
+        lats.append((nodes[a, 0] + nodes[b, 0]) / 2)
+        lons.append((nodes[a, 1] + nodes[b, 1]) / 2)
+        hours.append(stations[s]["hours"])
+        boats.append(max(stations[s]["boat_hours"],
+                         key=stations[s]["boat_hours"].get))
+
+    top = max(hours)
+    boat_ids = sorted(profile["boats"])
+    boat_colours = plt.get_cmap("tab10")(
+        np.linspace(0, 1, max(len(boat_ids), 1)))
+    boat_colour = {boat: boat_colours[i]
+                   for i, boat in enumerate(boat_ids)}
+    dots = ax.scatter(lons, lats,
+                      c=[boat_colour[boat] for boat in boats],
+                      s=[40 + 360 * (h / top) for h in hours],
+                      edgecolors=_INK, linewidths=0.4, zorder=6)
+    ax.legend(handles=[
+        Patch(facecolor=boat_colour[boat], edgecolor=_INK,
+              label=f"Boat {boat}")
+        for boat in boat_ids
+    ], title="Overflowing vessel", loc="upper right", fontsize=8,
+       title_fontsize=8)
+
+    # Label only the worst few. A number on every point is unreadable and
+    # hides the thing the map is for.
+    for s in ords[-5:]:
+        a = N_PORTS + 2 * s
+        ax.annotate(f"{s} ({stations[s]['hours']:.1f} h)",
+                    xy=(nodes[a, 1], nodes[a, 0]), xytext=(8, 6),
+                    textcoords="offset points", fontsize=8, color=_INK,
+                    bbox=dict(boxstyle="round,pad=0.25", fc="white",
+                              ec=_MUTED, alpha=0.85), zorder=11)
+
+    ax.set_title(f"{len(stations)} stations overflowed at least once; "
+                 f"the worst costs {top:.1f} h a season", fontsize=11)
+    _finish_map(fig, ax, save_path, title_suffix)
+
+
+def _finish_map(fig, ax, save_path, title_suffix):
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    if title_suffix:
+        fig.suptitle(title_suffix, fontsize=10)
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+    else:
+        plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=200)
+        print(f"Saved plot to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def plot_overflow_profile(profile, save_path=None, title_suffix=None):
+    """Two questions the map cannot answer.
+
+    Left: where in a trip overflows fall. Late clustering is just capacity
+    arithmetic; early clustering would mean the planner is mis-sizing trips.
+
+    Right: frequency against cost. The station that overflows most is not the
+    one that hurts most -- a hold that fills beside a port is nearly free --
+    and these two axes are expected to disagree.
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    hue = _STRATEGY_COLOURS[0]
+
+    pos = profile["positions"]
+    if pos:
+        ax1.hist(pos, bins=np.linspace(0, 1, 11), color=hue, alpha=0.85,
+                 edgecolor="white")
+        ax1.axvline(float(np.mean(pos)), color=_INK, linestyle="--",
+                    linewidth=1.5, label=f"mean {np.mean(pos):.2f}")
+        ax1.legend(fontsize=8)
+    ax1.set_xlabel("Position in trip  (0 = first station, 1 = last)")
+    ax1.set_ylabel("Overflows")
+    ax1.set_title("Where in a trip the hold fills", fontsize=10)
+
+    st = profile["stations"]
+    if st:
+        rate = [st[s]["rate"] for s in st]
+        cost = [st[s]["mean_cost"] for s in st]
+        ax2.scatter(rate, cost, s=70, color=hue, alpha=0.75,
+                    edgecolors="white", linewidths=0.8)
+        worst = max(st, key=lambda s: st[s]["hours"])
+        ax2.annotate(f"station {worst}",
+                     xy=(st[worst]["rate"], st[worst]["mean_cost"]),
+                     xytext=(8, 8), textcoords="offset points", fontsize=8,
+                     color=_INK)
+    ax2.set_xlabel("Overflows per season")
+    ax2.set_ylabel("Mean hours lost, when it happens")
+    ax2.set_title("Frequency is not cost", fontsize=10)
+
+    for ax in (ax1, ax2):
+        ax.grid(alpha=0.25, linewidth=0.6)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+
+    if title_suffix:
+        fig.suptitle(title_suffix, fontsize=10)
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+    else:
+        plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=200)
+        print(f"Saved plot to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
+def plot_trip_fragility(profile, save_path=None, title_suffix=None, top=None):
+    """Which planned trips break, and which ones cost.
+
+    Two measures on the same trips, so two panels sharing one y axis rather
+    than one panel with two x scales -- a trip that overflows often beside a
+    port is cheap, and a dual axis would hide exactly that.
+
+    Sorted by hours, worst at the top, because the ranking is the question.
+    """
+    trips = sorted(enumerate(profile["trips"]), key=lambda kv: -kv[1]["hours"])
+    if top:
+        trips = trips[:top]
+    if not trips:
+        return
+
+    labels = [f"{i}  (boat {t['boat']}, {t['n_stations']} stn)"
+              for i, t in trips]
+    y = np.arange(len(trips))[::-1]          # worst at the top
+    hue = _STRATEGY_COLOURS[0]
+
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2, figsize=(13, max(3.5, 0.34 * len(trips) + 1.6)), sharey=True)
+
+    ax1.barh(y, [t["p_overflow"] for _, t in trips], height=0.68,
+             color=hue, alpha=0.85)
+    ax1.set_xlabel("Scenarios where the trip overflowed")
+    ax1.set_title("How often it breaks", fontsize=10)
+    ax1.xaxis.set_major_formatter(
+        plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+
+    ax2.barh(y, [t["hours"] for _, t in trips], height=0.68,
+             color=hue, alpha=0.85)
+    ax2.set_xlabel("Expected hours lost per season")
+    ax2.set_title("What it costs", fontsize=10)
+
+    ax1.set_yticks(y)
+    ax1.set_yticklabels(labels, fontsize=8)
+    ax1.set_ylabel("Planned trip")
+
+    for ax in (ax1, ax2):
+        ax.grid(alpha=0.25, linewidth=0.6, axis="x")
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+
+    if title_suffix:
+        fig.suptitle(title_suffix, fontsize=10)
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+    else:
+        plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=200)
         print(f"Saved plot to {save_path}")

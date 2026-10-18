@@ -39,35 +39,37 @@ def solve_tsp(path, travel_times, time_limit=None, initial_solution=False):
         original `path` is returned.
     """
 
-    # Use unique nodes from the provided path. This loses ordering but keeps
-    # the set of nodes to solve over. The original path's first/last are
-    # used later as hints/terminators.
+    # Keep the node set for the model; path order is used only for endpoints.
     nodes = list(set(path))
 
-    # Two formulation branches are used in the codebase:
-    # - time_limit is None: compact/undirected version (only i<j stored)
-    # - time_limit provided: directed version (both (i,j) pairs used)
-    # The difference changes variable creation and degree constraints.
+    # None uses the compact undirected model; otherwise use the directed model.
     if time_limit is None:
 
-        # Define pairwise costs only for i<j to avoid duplicate symmetric
-        # entries; later we create symmetric aliases for the variables.
-        time = {(i, j): travel_times[i, j] for i in nodes for j in nodes if i != j and i < j}
+        time = {
+            (i, j): travel_times[i, j]
+            for i in nodes
+            for j in nodes
+            if i != j and i < j
+        }
 
         m = gp.Model()
 
         # Binary variable x[i,j] = 1 if edge (i,j) appears in solution.
         vars = m.addVars(time.keys(), obj=time, vtype=GRB.BINARY, name='x')
 
-        # Create symmetric mapping so vars[(j,i)] references the same var
-        # as vars[(i,j)]. This keeps the model representing undirected edges.
+        # Add reverse aliases for the undirected variables.
         vars.update({(j, i): vars[i, j] for i, j in vars.keys()})
 
         # Degree constraint: in undirected formulation each node has degree 2
         m.addConstrs(vars.sum(c, '*') == 2 for c in nodes)
 
-        # ensure station pairs are kept together
-        m.addConstrs(vars[i, j] == 1 for i, j in vars.keys() if (i % 2 == 0 and j == i - 1) or (i % 2 == 1 and j == i + 1))
+        # Keep station endpoint pairs together.
+        m.addConstrs(
+            vars[i, j] == 1
+            for i, j in vars.keys()
+            if (i % 2 == 0 and j == i - 1)
+            or (i % 2 == 1 and j == i + 1)
+        )
 
         # If the provided path isn't already a closed loop, add a constraint
         # that links the end back to the start.
@@ -88,14 +90,25 @@ def solve_tsp(path, travel_times, time_limit=None, initial_solution=False):
         m.addConstrs(vars.sum(c, '*') == 1 for c in nodes)
         m.addConstrs(vars.sum('*', c) == 1 for c in nodes)
 
-        # Preserve the project-specific adjacency constraints here as well
-        m.addConstrs(vars[i, j] + vars[j, i] == 1 for i, j in vars.keys() if (i % 2 == 0 and j == i - 1) or (i % 2 == 1 and j == i + 1))
+        # Keep station endpoint pairs together.
+        m.addConstrs(
+            vars[i, j] + vars[j, i] == 1
+            for i, j in vars.keys()
+            if (i % 2 == 0 and j == i - 1)
+            or (i % 2 == 1 and j == i + 1)
+        )
 
         if path[0] != path[-1]:
             m.addConstr(vars[path[-1], path[0]] + vars[path[0], path[-1]] == 1)
 
-        # fish time limit constraint
-        m.addConstr(gp.quicksum(time[i, j] * vars[i, j] for i, j in vars.keys() if i > 12) <= time_limit, name="DistanceLimit")
+        m.addConstr(
+            gp.quicksum(
+                time[i, j] * vars[i, j]
+                for i, j in vars.keys()
+                if i > 12
+            ) <= time_limit,
+            name="DistanceLimit",
+        )
 
     # Subtour elimination callback
     def subtourelim(model, where):
@@ -109,7 +122,11 @@ def solve_tsp(path, travel_times, time_limit=None, initial_solution=False):
             # cbGetSolution expects a dict-like of variables
             vals = model.cbGetSolution(model._vars)
             # Build a tuplelist of selected edges (those with value ~ 1).
-            selected = gp.tuplelist((i, j) for i, j in model._vars.keys() if vals[i, j] > 0.5)
+            selected = gp.tuplelist(
+                (i, j)
+                for i, j in model._vars.keys()
+                if vals[i, j] > 0.5
+            )
 
             tour = subtour(selected)
             # If the tour doesn't visit all nodes add a lazy cut. For the
@@ -127,7 +144,7 @@ def solve_tsp(path, travel_times, time_limit=None, initial_solution=False):
                             <= len(tour) - 1)
 
 
-    # Find the shortest subtour in the solution
+    # Find the shortest subtour.
     def subtour(edges):
         """Return the shortest cycle (list of nodes) found in 'edges'.
 
@@ -145,62 +162,71 @@ def solve_tsp(path, travel_times, time_limit=None, initial_solution=False):
                 current = neighbors[0]
                 thiscycle.append(current)
                 unvisited.remove(current)
-                neighbors = [j for i, j in edges.select(current, '*') if j in unvisited]
+                neighbors = [
+                    j for i, j in edges.select(current, '*')
+                    if j in unvisited
+                ]
             if len(thiscycle) <= len(cycle):
                 cycle = thiscycle
         return cycle
 
-    # Wire model variables into callback and set lazy-constraint mode
+    # Wire model variables into the callback.
     m._vars = vars
     m.setParam('OutputFlag', 0)
+    # These small TSPs do not benefit from parallelism.
+    m.setParam('Threads', 1)
     m.Params.LazyConstraints = 1
 
-    # Seed an initial solution if requested (simple MIP start using provided path)
+    # Seed an initial solution if requested.
     if initial_solution:
         for i in range(len(path)-1):
             vars[path[i], path[i+1]].start = 1
 
-    # Optimize with our callback that will add subtour-elimination cuts lazily
-    m.optimize(subtourelim)
+    # Always dispose the model, including on infeasible exits.
+    try:
+        m.optimize(subtourelim)
 
-    # If infeasible, return the given path as a fallback
-    if m.Status == GRB.INFEASIBLE:
-        return path
+        # If infeasible, return the given path as a fallback
+        if m.Status == GRB.INFEASIBLE:
+            return path
 
-    # Retrieve selected edges from the solved model
-    vals = m.getAttr('x', vars)
-    selected = gp.tuplelist((i, j) for i, j in vals.keys() if vals[i, j] > 0.5)
+        # Retrieve selected edges from the solved model
+        vals = m.getAttr('x', vars)
+        selected = gp.tuplelist(
+            (i, j) for i, j in vals.keys() if vals[i, j] > 0.5
+        )
 
-    def create_route(selected):
-        """Construct a route list from selected edges.
+        def create_route(selected):
+            """Construct a route list from selected edges.
 
-        The routing logic here follows the project's original behavior: it
-        starts at path[0] and walks the selected edges forward, preferring
-        nodes that satisfy a project-specific index threshold (>=13).
-        """
-        route = [path[0]]
-        # Walk until we've collected all nodes
-        while len(route) < len(nodes):
-            for i, j in selected:
-                # Prefer edges that originate at the last visited node and
-                # lead to a not-yet-visited node. The '(i >= 13 or j >= 13)'
-                # guard is project-specific and preserved.
-                if i == route[-1] and j not in route and (i >= 13 or j >= 13):
-                    route.append(j)
-                    break
-                elif j == route[-1] and i not in route and (i >= 13 or j >= 13):
-                    route.append(i)
-                    break
-                else:
-                    continue
-        # If the route ends with a node in the project-specific range,
-        # append the original path's last node as a terminator.
-        if route[-1] >= 13:
-            route.append(path[-1])
+            The routing logic here follows the project's original behavior: it
+            starts at path[0] and walks the selected edges forward, preferring
+            nodes that satisfy a project-specific index threshold (>=13).
+            """
+            route = [path[0]]
+            # Walk until we've collected all nodes
+            while len(route) < len(nodes):
+                for i, j in selected:
+                    # Prefer edges that originate at the last visited node and
+                    # lead to a not-yet-visited node. The '(i >= 13 or j >= 13)'
+                    # guard is project-specific and preserved.
+                    if i == route[-1] and j not in route and (i >= 13 or j >= 13):
+                        route.append(j)
+                        break
+                    elif j == route[-1] and i not in route and (i >= 13 or j >= 13):
+                        route.append(i)
+                        break
+                    else:
+                        continue
+            # If the route ends with a node in the project-specific range,
+            # append the original path's last node as a terminator.
+            if route[-1] >= 13:
+                route.append(path[-1])
 
-        return route
+            return route
 
-    new_route = create_route(selected)
+        new_route = create_route(selected)
 
-    return new_route
-
+        return new_route
+    finally:
+        m.dispose()

@@ -65,8 +65,15 @@ def load_gfsp_problem(ns, nv, cf, instance) -> ProblemInstance:
 
 
 def load_gfsp_full_problem(capacities=None, n_boats=4, home_port_index=0,
-                           fish_time_limit=120, work_limit=150) -> ProblemInstance:
-    """Load the full 581-station problem from gfsp_code."""
+                           fish_time_limit=120, work_limit=160) -> ProblemInstance:
+    """Load the full 581-station problem from gfsp_code.
+
+    full_problem.txt carries only ports, stations, home port index and
+    capacities, so the two limits come from here. Both match Saahil's
+    test_problem00, the one instance with the real unequal fleet: fish 120 h,
+    work 160 stations. Was 150 until 2026-10-08, which is his instance 01 --
+    same fleet size but four equal 100,000 kg holds.
+    """
     prob_path = os.path.join(
         _GFSP_DATA, "test_problems", "full_problem", "full_problem.txt"
     )

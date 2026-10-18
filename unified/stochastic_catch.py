@@ -5,26 +5,22 @@ solver's 581-station ordinal system (gfsp_code/).
 
 Station fallback strategy
 -------------------------
-The solver defines 581 stations (ordinals 0-580 from smb.2019.dat).
-The historical spring survey data (spring_historical_english.xlsx) covers
-only 518 of these as unique tow_station IDs.  For the remaining 63 stations
-we apply a tiered fallback:
+The solver defines 581 stations (ordinals 0-580 from smb.2019.dat). The
+historical spring survey data (spring_historical_english.xlsx) covers only 518
+of these as unique tow_station IDs, so there are two tiers:
 
-  Tier 1 (518 stations) — Direct historical distribution.
-      The station's own tow_station has historical catch observations.
-      We fit a normal distribution from those observations.
+  Tier 1 (518 stations) — the station's own records, fitted to a normal.
 
-  Tier 2 (35 stations) — Regional distribution.
-      The station has no direct data, but other stations in the same
-      region (first 3 digits of the tow_station code) do.  We pool all
-      catch observations from those region-mates and fit a single normal
-      distribution.
+  Tier 2 (63 stations) — the fit of the nearest station that has records, by
+      Euclidean distance between tow midpoints in decimal degrees. Candidates
+      are tier 1 only, so nothing inherits an inherited fit.
 
-  Tier 3 (28 stations) — Nearest geographic neighbour.
-      The station's entire region has no historical data.  We find the
-      geographically closest station (by tow midpoint, Euclidean on
-      decimal-degree coords) that has a distribution (Tier 1 or 2) and
-      copy its distribution parameters.
+A regional tier sat between these until 2026-10-08, pooling records from
+stations sharing the leading digits of the tow number (`tow_station // 100`)
+and catching 35 of the 63. It was dropped: those digits are a coding artefact
+rather than a claim about where fish are, and one geographic rule is easier to
+justify and to describe. The 35 stations gained 17.3% on the mean
+(944.7 -> 1107.7 kg); the fleet-wide mean moved +1.22%.
 
 All distributions are truncated at zero when sampling (no negative catch).
 """
@@ -103,7 +99,9 @@ _SMB_PATH = os.path.join(_ROOT, "gfsp_code", "data", "smb.2019.dat")
 _CACHE_PATH = os.path.join(_ROOT, ".cache", "catch_fit.npz")
 
 # Bump when anything stored changes, so old caches are rejected.
-_CACHE_VERSION = 1
+# 2 = dropped the regional tier; the 35 stations it caught now take the
+# nearest station's fit like the other 28.
+_CACHE_VERSION = 2
 
 
 def _source_fingerprint(excel_path):
@@ -151,10 +149,17 @@ def _tows_to_maps(tows):
 # ---------------------------------------------------------------------------
 
 def _fit_distributions(df, ordinal_to_tow, tow_to_ordinal, midpoints):
-    """Fit catch distributions for all 581 stations using the 3-tier fallback.
+    """Fit catch distributions for all 581 stations, with one fallback.
 
-    Uses Jess's create_distributions() from simulations/ for Tier 1 and Tier 2,
-    then applies nearest-neighbour fallback for remaining stations.
+    518 stations have their own records and use Jess's create_distributions()
+    from simulations/. The other 63 take the fit of the nearest station that
+    does, by straight-line distance between tow midpoints.
+
+    Dropped 2026-10-08: a regional tier that grouped by `tow_station // 100`
+    and caught 35 of the 63. Grouping on the tow number's leading digits is a
+    coding artefact, not a statement about where fish are, and one geographic
+    rule is easier to justify and to describe. Those 35 stations gain 17.3% on
+    the mean (944.7 -> 1107.7 kg); the fleet-wide mean moves +1.22%.
 
     Parameters
     ----------
@@ -169,7 +174,7 @@ def _fit_distributions(df, ordinal_to_tow, tow_to_ordinal, midpoints):
     means : np.ndarray, shape (581,)
     stds  : np.ndarray, shape (581,)
     tiers : np.ndarray, shape (581,), dtype=int
-        Which tier was used for each station (1, 2, or 3).
+        1 = own records, 2 = nearest station's.
     """
     means = np.full(N_STATIONS, np.nan)
     stds = np.full(N_STATIONS, np.nan)
@@ -192,38 +197,20 @@ def _fit_distributions(df, ordinal_to_tow, tow_to_ordinal, midpoints):
             stds[ordinal] = std if pd.notna(std) else params['mean'] * 0.3
             tiers[ordinal] = 1
 
-    # --- Tier 2: regional distributions (Jess's function) ---
-    # Add a region column (first 3 digits of tow_station)
-    catch_df['region'] = catch_df['tow_station'] // 100
-    region_dists = create_distributions(catch_df, group_col='region',
-                                        catch_col='catch')
-
-    for ordinal in range(N_STATIONS):
-        if tiers[ordinal] == 1:
-            continue  # already have direct data
-        tow = ordinal_to_tow[ordinal]
-        region = tow // 100
-        if region in region_dists:
-            params = region_dists[region]
-            means[ordinal] = params['mean']
-            std = params['std']
-            stds[ordinal] = std if pd.notna(std) else params['mean'] * 0.3
-            tiers[ordinal] = 2
-
-    # --- Tier 3: nearest geographic neighbour ---
-    has_dist = np.where(tiers > 0)[0]
+    # --- Tier 2: nearest station that has records ---
+    # Candidates are tier 1 only, so no station inherits a fit that was itself
+    # inherited -- otherwise the choice would depend on fitting order.
+    has_dist = np.where(tiers == 1)[0]
     needs_dist = np.where(tiers == 0)[0]
 
     if len(needs_dist) > 0 and len(has_dist) > 0:
         for ordinal in needs_dist:
-            dists = np.sqrt(
-                (midpoints[has_dist, 0] - midpoints[ordinal, 0]) ** 2 +
-                (midpoints[has_dist, 1] - midpoints[ordinal, 1]) ** 2
-            )
+            dists = np.hypot(midpoints[has_dist, 0] - midpoints[ordinal, 0],
+                             midpoints[has_dist, 1] - midpoints[ordinal, 1])
             nearest = has_dist[np.argmin(dists)]
             means[ordinal] = means[nearest]
             stds[ordinal] = stds[nearest]
-            tiers[ordinal] = 3
+            tiers[ordinal] = 2
 
     return means, stds, tiers
 
@@ -235,8 +222,8 @@ def _fit_distributions(df, ordinal_to_tow, tow_to_ordinal, midpoints):
 class CatchSimulator:
     """Generate stochastic catch scenarios for the 581-station survey network.
 
-    Fits normal distributions from historical spring survey data and handles
-    the 3-tier fallback for stations without direct observations.
+    Fits normal distributions from historical spring survey data, falling back
+    to the nearest station with records where a station has none.
 
     Parameters
     ----------
@@ -275,7 +262,7 @@ class CatchSimulator:
         """Fit distributions from the historical data.
 
         Loads smb.2019.dat for station mapping and the Excel file for
-        historical catch observations.  Applies the 3-tier fallback.
+        historical catch observations. Applies the nearest-station fallback.
 
         Reading the workbook takes about 138 seconds and gives the same answer
         every time, so the result is cached to disk and reused while the source
@@ -309,11 +296,9 @@ class CatchSimulator:
 
         self._fitted = True
 
-        tier_counts = {1: int((self.tiers == 1).sum()),
-                       2: int((self.tiers == 2).sum()),
-                       3: int((self.tiers == 3).sum())}
-        print(f"CatchSimulator {source}: {tier_counts[1]} direct, "
-              f"{tier_counts[2]} regional, {tier_counts[3]} nearest-neighbour")
+        print(f"CatchSimulator {source}: "
+              f"{int((self.tiers == 1).sum())} direct, "
+              f"{int((self.tiers == 2).sum())} nearest-neighbour")
 
     def sample(self, n_scenarios=1000, station_ids=None):
         """Generate catch scenario matrix.

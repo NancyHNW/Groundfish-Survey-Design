@@ -10,11 +10,56 @@ are purely the cost of reacting.
 from experiments.common import (CORE_COLUMNS, REPAIR_COLUMNS,
                                 add_baseline_delta, base_parser,
                                 describe_run, make_evaluator, output_path,
-                                print_table, save_csv, solve, sweep_eval)
+                                print_table, save_csv, solve_cached,
+                                sweep_eval)
 
-# Width 20 fits the longest label, repair_trip_2opt
+
+def plot_threshold_sweep(csv_path, save_path, forward_mean=None):
+    """Plot realised time and returns against the pre-emptive threshold."""
+    import csv
+    import matplotlib.pyplot as plt
+
+    with open(csv_path, newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    rows.sort(key=lambda row: float(row["case"]))
+
+    alpha = [float(row["case"]) for row in rows]
+    realised = [float(row["mean"]) for row in rows]
+    returns = [float(row["e_returns"]) for row in rows]
+
+    fig, ax1 = plt.subplots(figsize=(7.4, 5.0))
+    ax2 = ax1.twinx()
+    time_line, = ax1.plot(alpha, realised, marker="o", linewidth=2,
+                          color="#2c7fb8", label="Mean realised time")
+    return_line, = ax2.plot(alpha, returns, marker="s", linewidth=2,
+                            color="#d95f02", label="Expected returns")
+    lines = [time_line, return_line]
+    if forward_mean is not None:
+        baseline = ax1.axhline(
+            forward_mean, color="#555555", linestyle="--", linewidth=1.1,
+            label=f"Forward ({forward_mean:.1f} h)")
+        lines.append(baseline)
+
+    ax1.set_xlabel("Pre-emptive threshold, α")
+    ax1.set_ylabel("Mean realised time (h)", color="#2c7fb8")
+    ax2.set_ylabel("Expected unscheduled returns", color="#d95f02")
+    ax1.set_xticks(alpha)
+    ax1.grid(alpha=0.25, linewidth=0.6)
+    ax1.set_axisbelow(True)
+    ax1.set_title("Pre-emptive threshold trade-off")
+    ax1.legend(lines, [line.get_label() for line in lines],
+               frameon=False, loc="upper left")
+    ax1.spines["top"].set_visible(False)
+    ax2.spines["top"].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=200)
+    plt.close(fig)
+    print(f"Plot saved to {save_path}")
+
+
+# Width 20 fits the longest label, repair_trip_solver
 COLUMNS = ([("case", "case", 20, "")] + CORE_COLUMNS + REPAIR_COLUMNS
-           + [("vs_backtrack", "vs backtr", 11, "+.1f")])
+           + [("vs_forward", "vs fwd", 11, "+.1f")])
 
 THRESHOLD_COLUMNS = ([("case", "alpha", 10, "")] + CORE_COLUMNS)
 
@@ -24,12 +69,33 @@ CASES = [
     ("forward", {"strategy": "forward"}),
     ("preemptive_0.8", {"strategy": "preemptive", "preemptive_threshold": 0.8}),
     ("preemptive_0.7", {"strategy": "preemptive", "preemptive_threshold": 0.7}),
+    # 0.9 is the best threshold the sweep found; without it the main table
+    # shows preemptive at ~14h worse than its own best setting.
+    ("preemptive_0.9", {"strategy": "preemptive", "preemptive_threshold": 0.9}),
     ("repair_trip", {"strategy": "repair", "repair_scope": "trip"}),
     ("repair_boat", {"strategy": "repair", "repair_scope": "boat"}),
+    # keep_order keeps the planner's station order and re-decides only the
+    # trip breaks, so vs nn it prices the routing thrown away.
+    ("repair_trip_keep", {"strategy": "repair", "repair_scope": "trip",
+                          "repair_planner": "keep_order"}),
+    ("repair_boat_keep", {"strategy": "repair", "repair_scope": "boat",
+                          "repair_planner": "keep_order"}),
     ("repair_trip_2opt", {"strategy": "repair", "repair_scope": "trip",
                           "repair_planner": "2opt"}),
     ("repair_boat_2opt", {"strategy": "repair", "repair_scope": "boat",
                           "repair_planner": "2opt"}),
+    # ~1000x the cost of nn per repair. Fine on ns100, not on --full.
+    ("repair_trip_solver", {"strategy": "repair", "repair_scope": "trip",
+                            "repair_planner": "solver"}),
+    ("repair_boat_solver", {"strategy": "repair", "repair_scope": "boat",
+                            "repair_planner": "solver"}),
+    # tabu moves stations between the boat's own trips, which is the decision
+    # an overflow invalidates. Ties with solver at trip scope -- nothing to
+    # split -- and beats it by ~8h at boat scope. ~4 min per row on ns100.
+    ("repair_trip_tabu", {"strategy": "repair", "repair_scope": "trip",
+                          "repair_planner": "tabu"}),
+    ("repair_boat_tabu", {"strategy": "repair", "repair_scope": "boat",
+                          "repair_planner": "tabu"}),
 ]
 
 THRESHOLDS = (0.5, 0.6, 0.7, 0.8, 0.9)
@@ -38,26 +104,36 @@ THRESHOLDS = (0.5, 0.6, 0.7, 0.8, 0.9)
 def run(ns=100, nv=2, cf=125, instance=1, method="tabu_move", time_limit=10,
         catch_source="historical", n_scenarios=500, scenario_seed=123,
         capacity_buffer=1.0, sweep_thresholds=True, full=False,
-        home_ports=None):
+        home_ports=None, repair_solver_time=0.0, plan=None,
+        solver_seed=42):
     """Solve once, evaluate under each strategy, return the main table rows."""
     evaluator = make_evaluator(scenario_seed, n_scenarios)
 
+    cases = CASES
+    if repair_solver_time:
+        # Per repair, not per run. Only the solver rows read it.
+        cases = [(label, dict(kw, repair_solver_time=repair_solver_time)
+                  if kw.get("repair_planner") == "solver" else kw)
+                 for label, kw in CASES]
+
     print(f"Solving once with {method}...")
-    det = solve(ns=ns, nv=nv, cf=cf, instance=instance, method=method,
-                time_limit=time_limit, catch_source=catch_source,
-                capacity_buffer=capacity_buffer, full=full,
-                home_ports=home_ports)
+    det = solve_cached(plan, ns=ns, nv=nv, cf=cf, instance=instance,
+                       method=method, time_limit=time_limit,
+                       catch_source=catch_source,
+                       capacity_buffer=capacity_buffer, full=full,
+                       home_ports=home_ports, seed=solver_seed)
     trips, inst = det["trips"], det["instance"]
     planned = det["planned_time"]
     print(f"Planned {planned:.1f}h over {len(trips)} trips "
           f"(feasible={det['feasible']})\n")
 
     rows = [row for _, _, row
-            in sweep_eval(trips, inst, CASES, evaluator, planned,
+            in sweep_eval(trips, inst, cases, evaluator, planned,
                           planned_catch=det.get("planned_catch"))]
 
-    # Every row shares one route, so backtrack is the natural reference
-    add_baseline_delta(rows, "case", "backtrack", "vs_backtrack")
+    # Forward is the reference: it is the default policy (Section 3.3.3) and
+    # the one the survey actually matches.
+    add_baseline_delta(rows, "case", "forward", "vs_forward")
 
     print_table(rows, COLUMNS,
                 title=f"OVERFLOW STRATEGY COMPARISON  ({n_scenarios} scenarios, "
@@ -105,4 +181,6 @@ if __name__ == "__main__":
         scenario_seed=args.scenario_seed,
         capacity_buffer=args.capacity_buffer,
         sweep_thresholds=args.sweep_thresholds, full=args.full,
-        home_ports=args.home_ports)
+        home_ports=args.home_ports,
+        repair_solver_time=args.repair_solver_time,
+        plan=args.plan, solver_seed=args.solver_seeds[0])

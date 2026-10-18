@@ -11,26 +11,27 @@ single concrete season, which is what makes the overflow behaviour readable.
     python -m experiments.realisation --full --method tabu_combined
 """
 
-from experiments.common import (base_parser, describe_run, output_path, solve,
-                                strategy_tag)
+from experiments.common import (base_parser, describe_run, output_path,
+                                solve_cached, strategy_tag)
 
 
 def run(ns=20, nv=2, cf=62.5, instance=1, method="tabu_move", time_limit=10,
-        catch_source="historical", capacity_buffer=1.0, strategy="backtrack",
+        catch_source="historical", capacity_buffer=1.0, strategy="forward",
         preemptive_threshold=0.8, repair_scope="trip",
         repair_planner="nn",
         repair_solver_time=0.0, seed=None, full=False,
-        catch_table=True, home_ports=None):
+        catch_table=True, home_ports=None, plan=None):
     """Solve, draw one catch scenario, report and plot the realisation."""
     from unified.stochastic_catch import CatchSimulator
     from unified.stochastic_eval import (evaluate_single_realisation,
                                          plot_realisation, plot_time_comparison,
                                          print_catch_table)
 
-    det = solve(ns=ns, nv=nv, cf=cf, instance=instance, method=method,
-                time_limit=time_limit, catch_source=catch_source,
-                capacity_buffer=capacity_buffer, full=full,
-                home_ports=home_ports)
+    det = solve_cached(plan, ns=ns, nv=nv, cf=cf, instance=instance,
+                       method=method, time_limit=time_limit,
+                       catch_source=catch_source,
+                       capacity_buffer=capacity_buffer, full=full,
+                       home_ports=home_ports)
     trips, inst = det["trips"], det["instance"]
 
     print(f"\nGot {len(trips)} trips, planned {det['planned_time']:.1f}h "
@@ -136,4 +137,4 @@ if __name__ == "__main__":
         repair_solver_time=args.repair_solver_time,
         preemptive_threshold=args.threshold, seed=args.seed, full=args.full,
         home_ports=args.home_ports,
-        catch_table=args.catch_table)
+        catch_table=args.catch_table, plan=args.plan)

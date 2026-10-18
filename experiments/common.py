@@ -10,6 +10,8 @@ import csv
 import math
 import os
 
+import numpy as np
+
 # CLI method names -> the names run_heuristic_on_gfsp uses.
 # Only place that translates between the two.
 METHODS = {
@@ -128,6 +130,136 @@ def solve(ns=100, nv=2, cf=125, instance=1, method="tabu_move",
     return result
 
 
+# ---------------------------------------------------------------------------
+# Saved plans
+# ---------------------------------------------------------------------------
+
+PLAN_DIR = os.path.join(_ROOT, "tests", "plans")
+
+# What has to match before a saved plan may be reused. Scoring keys are not in
+# here -- the whole point is to score one plan many ways.
+_PLAN_KEYS = ("ns", "nv", "cf", "instance", "method", "time_limit",
+              "catch_source", "capacity_buffer", "full", "home_ports", "seed")
+
+
+# What solve() uses when a caller leaves a key out. Without this an experiment
+# that omits seed records seed=None while one that passes 42 records 42, for
+# the same solve -- which is the mismatch this whole mechanism is here to stop.
+_PLAN_DEFAULTS = {"seed": 42, "full": False, "home_ports": None}
+
+
+def _plan_params(kwargs):
+    """Fill in solve()'s defaults so two callers describe one solve the same."""
+    import inspect
+
+    out = dict(_PLAN_DEFAULTS)
+    for name, p in inspect.signature(solve).parameters.items():
+        if p.default is not inspect.Parameter.empty:
+            out[name] = p.default
+    out.update({k: v for k, v in kwargs.items() if k in _PLAN_KEYS})
+    return {k: out.get(k) for k in _PLAN_KEYS}
+
+
+def _plain(x):
+    """numpy -> json. Trip nodes come back as np ints and json refuses them."""
+    if isinstance(x, np.generic):
+        return x.item()
+    if isinstance(x, np.ndarray):
+        return [_plain(v) for v in x.tolist()]
+    if isinstance(x, dict):
+        return {k: _plain(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_plain(v) for v in x]
+    return x
+
+
+def save_plan(result, path, params):
+    """Write a solved plan plus the parameters that produced it."""
+    import datetime
+    import json
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    blob = {
+        "params": _plain(_plan_params(params)),
+        "saved": datetime.datetime.now().isoformat(timespec="seconds"),
+        "trips": _plain(result["trips"]),
+        "planned_time": float(result["planned_time"]),
+        "planned_catch": _plain(result.get("planned_catch")),
+        "feasible": bool(result.get("feasible", True)),
+        # Provenance for Table 3.3 and the Appendix B claim
+        "restarts": int(result.get("iterations", 0)),
+        "solve_s": float(result.get("elapsed", 0.0)),
+    }
+    with open(path, "w") as f:
+        json.dump(blob, f, indent=1)
+    return path
+
+
+def load_plan(path, params=None):
+    """Read a saved plan back into the shape solve() returns.
+
+    Rebuilds the instance from the saved parameters rather than storing it, so
+    the instance cannot drift from the plan. If params is given, every key in
+    _PLAN_KEYS must match -- scoring the wrong plan silently is the failure
+    this whole mechanism exists to stop.
+    """
+    import json
+
+    from unified.loaders import load_gfsp_full_problem, load_gfsp_problem
+
+    with open(path) as f:
+        blob = json.load(f)
+    saved = blob["params"]
+
+    if params is not None:
+        want = _plain(_plan_params(params))
+        bad = {k: (saved.get(k), want[k]) for k in _PLAN_KEYS
+               if saved.get(k) != want[k]}
+        if bad:
+            lines = "\n".join(f"    {k}: saved {s!r}, asked for {w!r}"
+                              for k, (s, w) in bad.items())
+            raise ValueError(
+                f"{path} was solved with different parameters:\n{lines}\n"
+                "  Delete the file to re-solve, or point --plan elsewhere.")
+
+    inst = (load_gfsp_full_problem() if saved.get("full")
+            else load_gfsp_problem(ns=saved["ns"], nv=saved["nv"],
+                                   cf=saved["cf"],
+                                   instance=saved["instance"]))
+    catch = blob.get("planned_catch")
+    return {
+        "trips": blob["trips"],
+        "instance": inst,
+        "planned_time": blob["planned_time"],
+        "planned_catch": np.asarray(catch, dtype=float) if catch else None,
+        "feasible": blob["feasible"],
+        "iterations": blob.get("restarts", 0),
+        "elapsed": blob.get("solve_s", 0.0),
+        "loaded_from": path,
+    }
+
+
+def solve_cached(plan_path, **kwargs):
+    """Load the plan at plan_path, or solve once and save it there.
+
+    This is what makes 'solve once, score many ways' true across separate
+    runs. First call solves and writes; every later call reads. Pass
+    plan_path=None to solve without caching.
+    """
+    if not plan_path:
+        return solve(**kwargs)
+    if os.path.exists(plan_path):
+        det = load_plan(plan_path, params=kwargs)
+        print(f"Loaded plan from {plan_path} "
+              f"({det['planned_time']:.1f}h, {len(det['trips'])} trips, "
+              f"{det['iterations']} restarts)")
+        return det
+    det = solve(**kwargs)
+    save_plan(det, plan_path, kwargs)
+    print(f"Saved plan to {plan_path}")
+    return det
+
+
 def _mc_se(std, n):
     """Standard error of a mean over n scenarios.
 
@@ -136,6 +268,25 @@ def _mc_se(std, n):
     """
     n = n or 0
     return std / math.sqrt(n - 1) if n > 1 else 0.0
+
+
+def _wilson_ci(k, n, z=1.96):
+    """95% interval for a proportion k/n, Wilson rather than normal.
+
+    P(exceed) saturates near 1.0 on the full problem, where the textbook
+    p +/- z*sqrt(p(1-p)/n) is both too narrow and capable of reaching past 1.
+    Wilson stays inside [0, 1] and does not collapse to zero width when every
+    scenario overflows, which is exactly the regime these runs sit in.
+
+    Returns (lo, hi). Both zero when n is zero.
+    """
+    if not n:
+        return 0.0, 0.0
+    p = k / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return max(0.0, centre - half), min(1.0, centre + half)
 
 
 def _returns_error(result, e_returns, n_trips):
@@ -155,21 +306,62 @@ def _returns_error(result, e_returns, n_trips):
     }
 
 
-def summarise(result, planned, n_trips, feasible=None, **extra):
+def _plan_balance(trips):
+    """Stations on the busiest and quietest vessel, and the spread in hours.
+
+    The station cap is a per-plan property, so it cannot be read off the
+    scenarios. Reported because a planner that breaks the cap is not
+    comparable with one that holds it, and feasible=True does not check it.
+    """
+    from unified.problem import N_PORTS
+    stations, hours = {}, {}
+    for t in trips:
+        b = t["boat_id"]
+        stations[b] = stations.get(b, 0) + len(
+            {(n - N_PORTS) // 2 for n in t["nodes"] if n >= N_PORTS})
+        hours[b] = hours.get(b, 0.0) + t["total_time"]
+    if not stations:
+        return {}
+    return {"max_stations": max(stations.values()),
+            "min_stations": min(stations.values()),
+            "makespan_planned": max(hours.values()),
+            "vessel_spread": max(hours.values()) - min(hours.values())}
+
+
+def summarise(result, planned, n_trips, feasible=None, trips=None, **extra):
     """Turn an evaluator result into one table row.
 
     Every experiment reports the same metrics. **extra is the column naming the
     row (buffer, strategy, method), and lands first in the dict.
+
+    Pass `trips` to get the plan's station balance as well -- the cap check for
+    the planner comparison, which no per-scenario measure can supply.
     """
     td = result["total_time_distribution"]
     e_returns = result["expected_unscheduled_returns"]
-    se = _mc_se(td["std"], result.get("n_simulations"))
+    n_sims = result.get("n_simulations")
+    se = _mc_se(td["std"], n_sims)
+
+    # Realised minus planned: what uncertainty cost this plan. Already computed
+    # by the evaluator, previously thrown away. .get() keeps a stubbed result
+    # working, and the tests stub one.
+    tp = result.get("time_penalty_distribution") or {}
+    penalty_se = _mc_se(tp.get("std", 0.0), n_sims)
+    # Wilson needs the count, and the evaluator only reports the proportion.
+    # Recovering it by multiplying back is exact -- p is a mean of booleans, so
+    # p*n is a whole number -- and it keeps the interval consistent with the
+    # p_exceed the table actually prints.
+    p_exceed = result["p_capacity_exceedance"]
+    exceed_lo, exceed_hi = _wilson_ci(round(p_exceed * (n_sims or 0)),
+                                      n_sims or 0)
 
     row = dict(extra)
     row.update({
         "planned": planned,
         "trips": n_trips,
-        "p_exceed": result["p_capacity_exceedance"],
+        "p_exceed": p_exceed,
+        "p_exceed_lo": exceed_lo,
+        "p_exceed_hi": exceed_hi,
         "e_returns": e_returns,
         # Per trip, not absolute. A tighter buffer plans more trips, so the
         # raw count can drop just by spreading the same risk more thinly.
@@ -180,16 +372,53 @@ def summarise(result, planned, n_trips, feasible=None, **extra):
         "mc_ci95": 1.96 * se,
         "p5": td["p5"],
         "p95": td["p95"],
+        "penalty": tp.get("mean", 0.0),
+        "penalty_sd": tp.get("std", 0.0),
+        "penalty_ci95": 1.96 * penalty_se,
         # Repair only, and zero everywhere else. Carried so a capped run is
         # visible: past the cap repair gives up and sails on backtrack, which
         # otherwise looks like a clean result.
         "e_repairs": result.get("expected_repairs", 0.0),
         "p_cap_hit": result.get("p_repair_cap_hit", 0.0),
     })
+    # Delay at the 95th percentile, and U as a share of the plan. The
+    # evaluator computes both halves; only the mean was being kept.
+    row["penalty_p95"] = tp.get("p95", 0.0)
+    row["u_pct"] = (row["penalty"] / planned) if planned else 0.0
+
+    # Realised makespan: the sum hides it, and the two can move in opposite
+    # directions -- loosening the station cap cut the sum and raised this.
+    row.update(_makespan(result))
+
     row.update(_returns_error(result, e_returns, n_trips))
+    if trips is not None:
+        row.update(_plan_balance(trips))
     if feasible is not None:
         row["feasible"] = feasible
     return row
+
+
+def _makespan(result):
+    """Mean and p95 of the longest single vessel's time, over scenarios.
+
+    The objective is summed vessel-hours, so nothing else reports this. It
+    matters if the survey is bounded by its season rather than by total hours.
+    """
+    per_scenario = []
+    for res in (result.get("all_results") or []):
+        hours = {}
+        # .get on both levels: a stubbed result carries neither, and the tests
+        # stub exactly that.
+        for d in (res.get("trip_details") or []):
+            hours[d["boat_id"]] = hours.get(d["boat_id"], 0.0) + \
+                d["adjusted_time"]
+        if hours:
+            per_scenario.append(max(hours.values()))
+    if not per_scenario:
+        return {}
+    arr = np.asarray(per_scenario)
+    return {"makespan": float(arr.mean()),
+            "makespan_p95": float(np.percentile(arr, 95))}
 
 
 def sweep_solve(param, values, evaluator, key=None, fmt=None,
@@ -226,7 +455,8 @@ def sweep_solve(param, values, evaluator, key=None, fmt=None,
             repair_solver_time=repair_solver_time,
             planned_catch=det.get("planned_catch"))
         row = summarise(result, det["planned_time"], len(det["trips"]),
-                        feasible=det["feasible"], **{key: value})
+                        feasible=det["feasible"], trips=det["trips"],
+                        **{key: value})
         yield value, det, result, row
 
 
@@ -248,7 +478,8 @@ def sweep_eval(trips, inst, cases, evaluator, planned, key="case",
     for label, kwargs in cases:
         result = evaluator.evaluate(trips, inst, planned_catch=planned_catch,
                                     **kwargs)
-        row = summarise(result, planned, len(trips), **{key: label})
+        row = summarise(result, planned, len(trips), trips=trips,
+                        **{key: label})
         yield label, result, row
 
 
@@ -442,6 +673,48 @@ def _paired_summary(block_rows, labels, baseline):
     return rows
 
 
+def paired_scenarios(times, baseline):
+    """Paired differences across scenarios, for one fixed solution.
+
+    The block version pairs on instances. This pairs on scenarios, which is
+    what is left once the solve is fixed -- the solver is deterministic at the
+    budgets these runs use, so the catch draw is the only randomness.
+
+    It matters because the strategies are strongly correlated: a heavy
+    scenario slows all of them, and that shared bad luck cancels on
+    subtraction. Two overlapping per-strategy error bars say nothing about
+    whether the difference between them is real; this does.
+
+    times : {label: array of per-scenario realised time}
+    """
+    base = times[baseline]
+    rows = []
+    for label, arr in times.items():
+        d = np.asarray(arr) - base
+        n = len(d)
+        mean = float(d.mean())
+        if n > 1:
+            sd = float(d.std(ddof=1))
+            se = sd / math.sqrt(n)
+            half = _t_critical(n - 1) * se
+        else:
+            sd = se = half = 0.0
+        lo, hi = mean - half, mean + half
+        rows.append({
+            "setting": label,
+            "n": n,
+            "mean": float(np.mean(arr)),
+            "diff": mean,
+            "sd": sd,
+            "se": se,
+            "ci_lo": lo,
+            "ci_hi": hi,
+            "significant": bool(n > 1 and (lo > 0 or hi < 0)),
+            "infeasible_blocks": 0,
+        })
+    return rows
+
+
 PAIRED_COLUMNS = [
     ("setting", "setting", 20, ""),
     ("n", "n", 5, "d"),
@@ -510,6 +783,27 @@ CORE_COLUMNS = [
 REPAIR_COLUMNS = [
     ("e_repairs", "E[rep]", 8, ".2f"),
     ("p_cap_hit", "cap hit", 9, ".1%"),
+]
+
+# Opt-in, for tables that have to be quotable in the report. CORE_COLUMNS gives
+# the mean an interval; these give one to every other headline number, at the
+# cost of a much wider table. Interval on a mean is +/- half-width; on
+# P(exceed) it is a Wilson [lo, hi], because that one saturates and an
+# asymmetric interval is the honest way to show it.
+BALANCE_COLUMNS = [
+    ("penalty", "U", 8, ".1f"),
+    ("u_pct", "U/plan", 8, ".1%"),
+    ("penalty_p95", "U p95", 8, ".1f"),
+    ("makespan", "makespan", 10, ".1f"),
+    ("max_stations", "max stn", 9, "d"),
+]
+
+INTERVAL_COLUMNS = [
+    ("p_exceed_lo", "exc lo", 9, ".1%"),
+    ("p_exceed_hi", "exc hi", 9, ".1%"),
+    ("returns_ci95", "+/-ret", 9, ".2f"),
+    ("penalty", "penalty", 10, ".1f"),
+    ("penalty_ci95", "+/-pen", 9, ".1f"),
 ]
 
 
@@ -596,6 +890,11 @@ def base_parser():
     solver.add_argument("--capacity-buffer", type=float, default=1.0,
                         help="Fraction of capacity the solver plans to, e.g. "
                              "0.8 leaves 20%% headroom (default: 1.0)")
+    solver.add_argument("--plan", default=None, metavar="PATH",
+                        help="Reuse a saved plan. Solves and writes it the "
+                             "first time, loads it after, so every experiment "
+                             "scores the same routes. Refuses to load a plan "
+                             "solved with different parameters")
 
     stoch = p.add_argument_group("stochastic")
     stoch.add_argument("--n-scenarios", type=int, default=500,
@@ -605,9 +904,10 @@ def base_parser():
     # Choices come from the registry, so adding a strategy needs no CLI edit
     from unified.stochastic_eval import (REPAIR_PLANNERS, REPAIR_SCOPES,
                                          STRATEGIES)
-    stoch.add_argument("--strategy", default="backtrack",
+    stoch.add_argument("--strategy", default="forward",
                        choices=sorted(STRATEGIES),
-                       help="Overflow response (default: backtrack)")
+                       help="Overflow response (default: forward, the policy "
+                            "that matches the survey -- a tow is one event)")
     stoch.add_argument("--threshold", type=float, default=0.8,
                        help="Preemptive return threshold (default: 0.8)")
     stoch.add_argument("--repair-scope", default="trip",
