@@ -1,0 +1,1270 @@
+---
+title: "Groundfish Survey Design DA"
+author: "Jessica Zeng"
+date: "2026-08-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+install.packages("readxl")
+install.packages("corrplot")
+```
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(corrplot)
+library(purrr)
+
+set.seed(566)
+```
+
+## Data Analysis
+
+```{r}
+# Read in data
+df <- read_excel("spring_historical_english.xlsx")
+```
+
+```{r}
+# str(df)
+# summary(df)
+```
+
+Look at how many unique variables there are
+```{r}
+sapply(df, function(x) length(unique(x)))
+```
+
+Remove useless prediction variables
+```{r}
+df_model_general <- df[, !names(df) %in% c(
+  "mission_id",
+  "mission_name",
+  "station_id",
+  "station_type",
+  "station_number",
+  "date",
+  "cast_latitude_DMS",
+  "cast_longitude_DMS",
+  "haul_latitude_DMS",
+  "haul_longitude_DMS",
+  "sample_id",
+  "londunarhofn_nr",
+  "name",
+  "month",
+  "region",
+  "sub_region",
+  "gear_number",
+  "gear_name",
+  "sample_category",
+  "trawl_number",
+  "trawl_start",
+  "trawl_end",
+  "fishing_grounds",
+  "einkst",
+  "einknr",
+  "flokkur",
+  "heimah",
+  "current_dir",
+  "current_speed",
+  "ocean_state",
+  "brl"
+)]
+```
+
+NOTE: we will remove tow_station in the future, as it is less of a predictor variable, and more of a grouping variable. We will factor this in later.
+
+```{r}
+str(df_model_general)
+```
+Remaining variables:
+year
+cast_latitude
+cast_longitude
+haul_latitude
+haul_longitude
+depth_cast
+depth_haul
+ship_number
+wind_speed
+wind_direction
+weather
+cloud
+sea_state
+bottom_temp
+air_temp
+barometer
+trawl_speed
+trawl_length
+trawl_bearing
+trawl_time
+catch
+tow_station
+quadrant
+
+## Exploration
+### Numerical variables
+```{r}
+plot_catch_relationship <- function(variable, data) {
+  
+  plot(data[[variable]], data$catch,
+       main = paste("Catch vs", variable),
+       xlab = variable,
+       ylab = "Catch (kg)",
+       pch = 19)
+  
+  abline(lm(data$catch ~ data[[variable]]),
+         lwd = 2)
+}
+```
+
+```{r}
+plot_catch_relationship("year", df_model_general)
+plot_catch_relationship("depth_cast", df_model_general)
+plot_catch_relationship("depth_haul", df_model_general)
+plot_catch_relationship("cast_latitude", df_model_general)
+plot_catch_relationship("cast_longitude", df_model_general)
+plot_catch_relationship("haul_latitude", df_model_general)
+plot_catch_relationship("haul_longitude", df_model_general)
+plot_catch_relationship("bottom_temp", df_model_general)
+plot_catch_relationship("surface_temp", df_model_general)
+plot_catch_relationship("air_temp", df_model_general)
+plot_catch_relationship("barometer", df_model_general)
+plot_catch_relationship("wind_speed", df_model_general)
+plot_catch_relationship("trawl_speed", df_model_general)
+plot_catch_relationship("trawl_length", df_model_general)
+plot_catch_relationship("trawl_time", df_model_general)
+plot_catch_relationship("trawl_bearing", df_model_general)
+```
+
+One large plot for the report:
+```{r}
+plot_catch_relationship <- function(variable, data) {
+  
+  plot(data[[variable]], data$catch,
+       main = paste("Catch vs", variable),
+       xlab = variable,
+       ylab = "Catch (kg)",
+       pch = 19,
+       cex = 0.5)
+  
+  abline(lm(data$catch ~ data[[variable]]),
+         lwd = 2)
+}
+
+# Set up a 4 x 4 grid
+par(mfrow = c(4, 4),
+    mar = c(4, 4, 3, 1))
+
+plot_catch_relationship("year", df_model_general)
+plot_catch_relationship("depth_cast", df_model_general)
+plot_catch_relationship("depth_haul", df_model_general)
+plot_catch_relationship("cast_latitude", df_model_general)
+plot_catch_relationship("cast_longitude", df_model_general)
+plot_catch_relationship("haul_latitude", df_model_general)
+plot_catch_relationship("haul_longitude", df_model_general)
+plot_catch_relationship("bottom_temp", df_model_general)
+plot_catch_relationship("surface_temp", df_model_general)
+plot_catch_relationship("air_temp", df_model_general)
+plot_catch_relationship("barometer", df_model_general)
+plot_catch_relationship("wind_speed", df_model_general)
+plot_catch_relationship("trawl_speed", df_model_general)
+plot_catch_relationship("trawl_length", df_model_general)
+plot_catch_relationship("trawl_time", df_model_general)
+plot_catch_relationship("trawl_bearing", df_model_general)
+
+# Reset plotting layout
+par(mfrow = c(1, 1))
+```
+
+
+### Categorical variables
+```{r}
+# Convert categorical variables to factors
+df_model_general$ship_number <- as.factor(df_model_general$ship_number)
+df_model_general$quadrant <- as.factor(df_model_general$quadrant)
+df_model_general$weather <- as.factor(df_model_general$weather)
+df_model_general$cloud <- as.factor(df_model_general$cloud)
+df_model_general$sea_state <- as.factor(df_model_general$sea_state)
+```
+
+```{r}
+# Catch by quadrant
+boxplot(catch ~ quadrant,
+        data = df_model_general,
+        main = "Catch by Quadrant",
+        xlab = "Quadrant",
+        ylab = "Catch (kg)")
+# Catch by ship
+boxplot(catch ~ ship_number,
+        data = df_model_general,
+        main = "Catch by Ship",
+        xlab = "Ship Number",
+        ylab = "Catch (kg)")
+# Catch by weather condition
+boxplot(catch ~ weather,
+        data = df_model_general,
+        main = "Catch by Weather",
+        xlab = "Weather",
+        ylab = "Catch (kg)")
+# Catch by cloud condition
+boxplot(catch ~ cloud,
+        data = df_model_general,
+        main = "Catch by Cloud Condition",
+        xlab = "Cloud",
+        ylab = "Catch (kg)")
+# Catch by sea state
+boxplot(catch ~ sea_state,
+        data = df_model_general,
+        main = "Catch by Sea State",
+        xlab = "Sea State",
+        ylab = "Catch (kg)")
+```
+One plot for report:
+```{r}
+# Set up a 2 x 3 grid
+par(mfrow = c(2, 3),
+    mar = c(4, 4, 3, 1))
+
+# Catch by quadrant
+boxplot(catch ~ quadrant,
+        data = df_model_general,
+        main = "Catch by Quadrant",
+        xlab = "Quadrant",
+        ylab = "Catch (kg)")
+
+# Catch by ship
+boxplot(catch ~ ship_number,
+        data = df_model_general,
+        main = "Catch by Ship",
+        xlab = "Ship Number",
+        ylab = "Catch (kg)")
+
+# Catch by weather condition
+boxplot(catch ~ weather,
+        data = df_model_general,
+        main = "Catch by Weather",
+        xlab = "Weather",
+        ylab = "Catch (kg)")
+
+# Catch by cloud condition
+boxplot(catch ~ cloud,
+        data = df_model_general,
+        main = "Catch by Cloud Condition",
+        xlab = "Cloud",
+        ylab = "Catch (kg)")
+
+# Catch by sea state
+boxplot(catch ~ sea_state,
+        data = df_model_general,
+        main = "Catch by Sea State",
+        xlab = "Sea State",
+        ylab = "Catch (kg)")
+
+# Reset plotting layout
+par(mfrow = c(1, 1))
+```
+
+
+## Preliminary model
+```{r}
+# Variables for preliminary model
+df_prelim <- df_model_general[, c(
+  "year",
+  "cast_latitude",
+  "cast_longitude",
+  "haul_latitude",
+  "haul_longitude",
+  "depth_cast",
+  "depth_haul",
+  "ship_number",
+  "wind_speed",
+  "wind_direction",
+  "weather",
+  "cloud",
+  "sea_state",
+  "bottom_temp",
+  "air_temp",
+  "barometer",
+  "trawl_speed",
+  "trawl_length",
+  "trawl_bearing",
+  "trawl_time",
+  "catch",
+  "tow_station",
+  "quadrant"
+)]
+```
+
+Treat as categorical variables
+```{r}
+df_prelim$ship_number <- as.factor(df_prelim$ship_number)
+df_prelim$weather <- as.factor(df_prelim$weather)
+df_prelim$cloud <- as.factor(df_prelim$cloud)
+df_prelim$sea_state <- as.factor(df_prelim$sea_state)
+df_prelim$quadrant <- as.factor(df_prelim$quadrant)
+```
+
+### Examine catch
+```{r}
+# Raw catch
+hist(df_prelim$catch,
+     breaks = 50,
+     main = "Distribution of Raw Catch",
+     xlab = "Catch (kg)")
+
+# Log-transformed catch
+df_prelim$log_catch <- log(df_prelim$catch)
+
+hist(df_prelim$log_catch,
+     breaks = 50,
+     main = "Distribution of Log(Catch)",
+     xlab = "Log(Catch) (kg)")
+```
+
+### Examine trawl variables
+```{r}
+#Correlation matrix
+trawl_cor <- cor(
+  df_prelim[, c(
+    "trawl_speed",
+    "trawl_length",
+    "trawl_time"
+  )],
+  use = "pairwise.complete.obs"
+)
+
+round(trawl_cor, 3)
+```
+There is essentially no linear correlation between trawl_speed and trawl_length (r=0.055)
+
+There is a moderate negative relationship between trawl_speed and trawl_time (r=-0.483)
+
+There is a strong positive relationship between trawl_length and trawl_time (r=0.768)
+
+
+Look into relationship between length & time
+```{r}
+plot(
+  df_prelim$trawl_length,
+  df_prelim$trawl_time,
+  main = "Trawl Length vs Trawl Time",
+  xlab = "Trawl Length",
+  ylab = "Trawl Time",
+  pch = 19
+)
+
+abline(
+  lm(trawl_time ~ trawl_length,
+     data = df_prelim),
+  lwd = 2
+)
+```
+
+
+### Look into correlations between numerical variables
+```{r}
+numeric_vars <- df_prelim[, c(
+  "year",
+  "cast_latitude",
+  "cast_longitude",
+  "haul_latitude",
+  "haul_longitude",
+  "depth_cast",
+  "depth_haul",
+  "wind_speed",
+  "wind_direction",
+  "bottom_temp",
+  "air_temp",
+  "barometer",
+  "trawl_speed",
+  "trawl_length",
+  "trawl_bearing",
+  "trawl_time"
+)]
+
+cor_matrix <- cor(
+  numeric_vars,
+  use = "pairwise.complete.obs"
+)
+
+round(cor_matrix, 2)
+
+corrplot(
+  cor_matrix,
+  method = "circle",
+  type = "upper",
+  tl.col = "black",
+  tl.srt = 45
+)
+```
+
+```{r}
+preliminary_model <- lm(
+  log_catch ~
+    year +
+    cast_latitude +
+    cast_longitude +
+    haul_latitude +
+    haul_longitude +
+    depth_cast +
+    depth_haul +
+    ship_number +
+    wind_speed +
+    wind_direction +
+    weather +
+    cloud +
+    sea_state +
+    bottom_temp +
+    air_temp +
+    barometer +
+    trawl_speed +
+    trawl_length +
+    trawl_bearing +
+    trawl_time +
+    quadrant,
+  data = df_prelim
+)
+
+summary(preliminary_model)
+```
+
+### Check multi collinearity (VIF)
+car library not working, make own vif function:
+```{r}
+# Calculate VIF for each numerical predictor
+calculate_vif <- function(model) {
+  
+  # Get the model matrix
+  X <- model.matrix(model)[, -1]
+  
+  # Calculate VIF for each column
+  vif_values <- numeric(ncol(X))
+  names(vif_values) <- colnames(X)
+  
+  for (i in seq_along(vif_values)) {
+    
+    other_vars <- X[, -i, drop = FALSE]
+    target <- X[, i]
+    
+    auxiliary_model <- lm(target ~ other_vars)
+    
+    R2 <- summary(auxiliary_model)$r.squared
+    
+    vif_values[i] <- 1 / (1 - R2)
+  }
+  
+  return(vif_values)
+}
+```
+
+```{r}
+vif_values <- calculate_vif(preliminary_model)
+round(vif_values, 2)
+```
+
+Rough interpretation of VIF
+VIF 1-2, little concern
+VIF 2-5, moderate
+VIF 5-10, high
+VIF >10 Very high
+
+Can remove cast_latitude, cast_longitude as they are highly correlated with haul_latitude, haul_longitude.
+
+Can remove depth_cast as similar to depth_haul 
+
+Even though fround before that trawl speed, time and length are their own variables, the VIF finds speed and time redundant relative to the other trawl variables. Therefore we will remove trawl_speed and trawl_time
+
+Remove quadrant too as it was created from the latitude and longitude variables. This variable may be useful for more simpler models, but not for this multilinear regression model. 
+
+```{r}
+# df_prelim$cast_latitude <- NULL
+# df_prelim$cast_latitude <- NULL
+# df_prelim$depth_cast <- NULL
+```
+
+For sake of simplification, we will remove weather, cloud, sea_state, wind_speed, and wind_direction. However, with more time, would try to investigate these variables further. 
+
+
+## Build second model
+
+### Build new dataset
+```{r}
+df_model_2 <- df_prelim[, c(
+  "year",
+  "haul_latitude",
+  "haul_longitude",
+  "depth_haul",
+  "ship_number",
+  "bottom_temp",
+  "air_temp",
+  "barometer",
+  "trawl_length",
+  "trawl_bearing",
+  "catch",
+  "log_catch",
+  "tow_station"
+)]
+```
+
+### Build new model
+```{r}
+model_2 <- lm(
+  log_catch ~
+    year +
+    haul_latitude +
+    haul_longitude +
+    depth_haul +
+    ship_number +
+    bottom_temp +
+    air_temp +
+    barometer +
+    trawl_length +
+    trawl_bearing,
+  data = df_model_2
+)
+
+summary(model_2)
+```
+Model 2 explains 18.36% of variation, but model 1 explains 20.9%.
+
+
+### Check collinearity
+```{r}
+vif_values_2 <- calculate_vif(model_2)
+
+round(vif_values_2, 2)
+```
+Largest VIF is 4.02, which is generally acceptable. 
+
+We can now use model 2 as a baseline model. 
+
+```{r}
+summary(model_2)$coefficients
+```
+barometer is not significant with p=0.897
+Similarly, depth_haul also has a high p-value of p=0.964. However this may suggest that the variable is non-linearly correlated with catch.
+
+```{r}
+par(mfrow = c(2, 2))
+plot(model_2)
+```
+
+```{r}
+drop1(model_2, test = "F")
+```
+
+## TESTING STATION CATCH
+1. Extract 2002-2022, divide into 10 years training/testing, repeat this process 100 times. 
+2. Fit the regression model.
+3. Predict station-level catch. Predict log_catch for each station in the held-out years, then transform predictions back to kilograms.
+4. Compare predictions with observations. Calculate MAE, RMSE and MAPE across the testing stations, and summarise performance across the 100 repetitions.
+
+```{r}
+
+# --------------------------------------------------
+# 1. Settings
+# --------------------------------------------------
+
+n_iterations <- 100
+n_train_years <- 10
+n_test_years <- 10
+
+years <- 2002:2022
+
+categorical_vars <- c(
+  "ship_number", "weather", "cloud",
+  "sea_state", "quadrant"
+)
+
+# --------------------------------------------------
+# 2. Prepare data
+# --------------------------------------------------
+
+df <- df %>%
+  mutate(
+    year = as.numeric(year),
+    tow_station = as.character(tow_station),
+    catch = as.numeric(catch),
+    log_catch = ifelse(catch > 0, log(catch), NA_real_)
+  )
+
+for (v in categorical_vars) {
+  if (v %in% names(df)) {
+    df[[v]] <- as.factor(df[[v]])
+  }
+}
+
+# --------------------------------------------------
+# 3. Define regression models
+# --------------------------------------------------
+
+preliminary_formula <- log_catch ~
+  year +
+  cast_latitude + cast_longitude +
+  haul_latitude + haul_longitude +
+  depth_cast + depth_haul +
+  ship_number +
+  wind_speed + wind_direction +
+  weather + cloud + sea_state +
+  bottom_temp + air_temp + barometer +
+  trawl_speed + trawl_length +
+  trawl_bearing + trawl_time +
+  quadrant
+
+simplified_formula <- log_catch ~
+  year +
+  haul_latitude + haul_longitude +
+  depth_haul +
+  ship_number +
+  bottom_temp + air_temp + barometer +
+  trawl_length + trawl_bearing
+
+model_formulas <- list(
+  "Preliminary" = preliminary_formula,
+  "Simplified" = simplified_formula
+)
+
+# --------------------------------------------------
+# 4. Fit model and predict station catches
+#    with 95% prediction intervals
+# --------------------------------------------------
+
+fit_and_predict <- function(formula, train_data, test_data) {
+
+  train_data <- droplevels(train_data)
+
+  # Match categorical levels to training data
+  for (v in categorical_vars) {
+    if (v %in% all.vars(formula)) {
+      if (v %in% names(train_data) &&
+          is.factor(train_data[[v]])) {
+
+        test_data[[v]] <- factor(
+          test_data[[v]],
+          levels = levels(train_data[[v]])
+        )
+      }
+    }
+  }
+
+  fit <- lm(
+    formula,
+    data = train_data,
+    na.action = na.exclude
+  )
+
+  # Duan smearing correction
+  smearing_factor <- mean(
+    exp(residuals(fit)),
+    na.rm = TRUE
+  )
+
+  pred <- predict(
+    fit,
+    newdata = test_data,
+    interval = "prediction",
+    level = 0.95
+  )
+
+  data.frame(
+    tow_station = test_data$tow_station,
+    year = test_data$year,
+    actual = test_data$catch,
+    predicted = exp(pred[, "fit"]) * smearing_factor,
+    lower = exp(pred[, "lwr"]) * smearing_factor,
+    upper = exp(pred[, "upr"]) * smearing_factor
+  )
+}
+
+# --------------------------------------------------
+# 5. Calculate performance metrics
+# --------------------------------------------------
+
+calculate_metrics <- function(predictions) {
+
+  actual <- predictions$actual
+  predicted <- predictions$predicted
+  lower <- predictions$lower
+  upper <- predictions$upper
+
+  valid <- is.finite(actual) &
+    is.finite(predicted) &
+    is.finite(lower) &
+    is.finite(upper)
+
+  actual <- actual[valid]
+  predicted <- predicted[valid]
+  lower <- lower[valid]
+  upper <- upper[valid]
+
+  if (length(actual) == 0) {
+    return(data.frame(
+      n_evaluated = 0,
+      MAE = NA_real_,
+      RMSE = NA_real_,
+      MAPE = NA_real_,
+      Mean_Bias = NA_real_,
+      R_squared = NA_real_,
+      Coverage = NA_real_,
+      Mean_Interval_Width = NA_real_
+    ))
+  }
+
+  errors <- predicted - actual
+
+  positive_actual <- actual > 0
+
+  MAPE <- if (any(positive_actual)) {
+    mean(
+      abs(
+        errors[positive_actual] /
+          actual[positive_actual]
+      )
+    ) * 100
+  } else {
+    NA_real_
+  }
+
+  R_squared <- if (
+    length(actual) > 1 &&
+    sum((actual - mean(actual))^2) > 0
+  ) {
+    1 - sum(errors^2) /
+      sum((actual - mean(actual))^2)
+  } else {
+    NA_real_
+  }
+
+  coverage <- mean(
+    actual >= lower & actual <= upper
+  ) * 100
+
+  interval_width <- mean(upper - lower)
+
+  data.frame(
+    n_evaluated = length(actual),
+    MAE = mean(abs(errors)),
+    RMSE = sqrt(mean(errors^2)),
+    MAPE = MAPE,
+    Mean_Bias = mean(errors),
+    R_squared = R_squared,
+    Coverage = coverage,
+    Mean_Interval_Width = interval_width
+  )
+}
+
+# --------------------------------------------------
+# 6. Run repeated train-test validation
+# --------------------------------------------------
+
+regression_results <- list()
+station_predictions_list <- list()
+
+set.seed(566)
+
+for (i in seq_len(n_iterations)) {
+
+  # Randomly select training and testing years
+  train_years <- sample(years, n_train_years)
+
+  test_years <- sample(
+    setdiff(years, train_years),
+    n_test_years
+  )
+
+  train_data <- df %>%
+    filter(year %in% train_years)
+
+  test_data <- df %>%
+    filter(year %in% test_years)
+
+  iteration_predictions <- list()
+
+  for (model_name in names(model_formulas)) {
+
+    iteration_predictions[[model_name]] <-
+      tryCatch(
+        fit_and_predict(
+          formula = model_formulas[[model_name]],
+          train_data = train_data,
+          test_data = test_data
+        ),
+        error = function(e) NULL
+      )
+  }
+
+  # Skip iteration if either model fails
+  if (
+    is.null(iteration_predictions[["Preliminary"]]) ||
+    is.null(iteration_predictions[["Simplified"]])
+  ) {
+    next
+  }
+
+  preliminary_predictions <-
+    iteration_predictions[["Preliminary"]]
+
+  simplified_predictions <-
+    iteration_predictions[["Simplified"]]
+
+  # Compare both models using the same test observations
+  common_valid <- with(
+    preliminary_predictions,
+    is.finite(actual) &
+      is.finite(predicted) &
+      is.finite(lower) &
+      is.finite(upper)
+  ) & with(
+    simplified_predictions,
+    is.finite(actual) &
+      is.finite(predicted) &
+      is.finite(lower) &
+      is.finite(upper)
+  )
+
+  preliminary_predictions <-
+    preliminary_predictions[common_valid, ]
+
+  simplified_predictions <-
+    simplified_predictions[common_valid, ]
+
+  iteration_predictions[["Preliminary"]] <-
+    preliminary_predictions
+
+  iteration_predictions[["Simplified"]] <-
+    simplified_predictions
+
+  for (model_name in names(model_formulas)) {
+
+    predictions <- iteration_predictions[[model_name]]
+
+    # Save station-level observations and predictions
+   station_predictions_list[[length(station_predictions_list) + 1]] <-
+      predictions %>%
+      mutate(
+        model = model_name,
+        iteration = i
+    )
+   
+    metrics <- calculate_metrics(predictions)
+
+    metrics$model <- model_name
+    metrics$iteration <- i
+
+    regression_results[[length(regression_results) + 1] <- metrics
+  }
+
+  if (i %% 10 == 0) {
+    cat("Completed iteration", i, "of", n_iterations, "\n")
+  }
+}
+
+# --------------------------------------------------
+# 7. Summarise regression performance
+# --------------------------------------------------
+
+regression_results_df <- bind_rows(regression_results)
+
+regression_summary <- regression_results_df %>%
+  group_by(model) %>%
+  summarise(
+    Successful_Iterations = n(),
+
+    Mean_Observations = mean(
+      n_evaluated, na.rm = TRUE
+    ),
+
+    Mean_MAE = mean(MAE, na.rm = TRUE),
+    SD_MAE = sd(MAE, na.rm = TRUE),
+
+    Mean_RMSE = mean(RMSE, na.rm = TRUE),
+    SD_RMSE = sd(RMSE, na.rm = TRUE),
+
+    Mean_MAPE = mean(MAPE, na.rm = TRUE),
+    SD_MAPE = sd(MAPE, na.rm = TRUE),
+
+    Mean_Bias = mean(Mean_Bias, na.rm = TRUE),
+
+    Mean_R_squared = mean(
+      R_squared, na.rm = TRUE
+    ),
+
+    Mean_Coverage = mean(
+      Coverage, na.rm = TRUE
+    ),
+
+    SD_Coverage = sd(
+      Coverage, na.rm = TRUE
+    ),
+
+    Mean_Interval_Width = mean(
+      Mean_Interval_Width, na.rm = TRUE
+    ),
+
+    .groups = "drop"
+  )
+
+print(regression_summary)
+
+# --------------------------------------------------
+# 8. Combine station-level predictions
+# --------------------------------------------------
+
+station_predictions_df <- bind_rows(
+  station_predictions_list
+)
+
+# Keep only finite observed and predicted catches
+station_predictions_df <- station_predictions_df %>%
+  filter(
+    is.finite(actual),
+    is.finite(predicted),
+    is.finite(lower),
+    is.finite(upper)
+  )
+
+# --------------------------------------------------
+# 9. Calculate station-level catch percentiles
+#    separately for each model
+# --------------------------------------------------
+
+station_catch_percentiles <- station_predictions_df %>%
+  group_by(model) %>%
+  summarise(
+    Total_Station_Predictions = n(),
+
+    # Observed station catch percentiles (kg)
+    Actual_Catch_2.5th_Percentile = quantile(
+      actual, 0.025, na.rm = TRUE
+    ),
+
+    Actual_Catch_97.5th_Percentile = quantile(
+      actual, 0.975, na.rm = TRUE
+    ),
+
+    # Predicted station catch percentiles (kg)
+    Predicted_Catch_2.5th_Percentile = quantile(
+      predicted, 0.025, na.rm = TRUE
+    ),
+
+    Predicted_Catch_97.5th_Percentile = quantile(
+      predicted, 0.975, na.rm = TRUE
+    ),
+
+    # Percentiles of the lower prediction bounds (kg)
+    Lower_Bound_2.5th_Percentile = quantile(
+      lower, 0.025, na.rm = TRUE
+    ),
+
+    Lower_Bound_97.5th_Percentile = quantile(
+      lower, 0.975, na.rm = TRUE
+    ),
+
+    # Percentiles of the upper prediction bounds (kg)
+    Upper_Bound_2.5th_Percentile = quantile(
+      upper, 0.025, na.rm = TRUE
+    ),
+
+    Upper_Bound_97.5th_Percentile = quantile(
+      upper, 0.975, na.rm = TRUE
+    ),
+
+    .groups = "drop"
+  )
+
+print(station_catch_percentiles)
+
+```
+
+
+## TESTING TOTAL CATCH
+Test model 2 and model 1
+1. Extract 2002-2022, divide into 10 years training/testing
+2. Fit regression model
+3. Predict catch for testing years
+4. Generate 1000 surveys
+5. Repeat 100 times
+
+Set up both models
+```{r}
+df <- read_excel("spring_historical_english.xlsx")
+
+# Create log catch
+df <- df |>
+  mutate(
+    catch = as.numeric(catch),
+    log_catch = log(catch)
+  )
+
+# Formulas from your two fitted models
+model_formulas <- list(
+  "Preliminary Model" = formula(preliminary_model),
+  "Model 2" = formula(model_2)
+)
+
+# All predictors required by both models
+required_variables <- unique(
+  unlist(lapply(model_formulas, all.vars))
+)
+
+# Keep rows with valid response and predictor values
+df_test <- df |>
+  filter(
+    catch > 0,
+    is.finite(catch),
+    is.finite(log_catch),
+    if_all(all_of(required_variables), ~ !is.na(.x))
+  )
+
+# Restrict testing to the chosen historical period
+years <- sort(unique(
+  df_test$year[
+    df_test$year >= 2002 &
+    df_test$year <= 2022
+  ]
+))
+
+years <- tail(years, 20)
+
+if (length(years) != 20) {
+  stop("There must be 20 usable years in the selected period.")
+}
+
+df_test <- df_test |>
+  filter(year %in% years)
+```
+
+
+Run both models on same tests
+```{r}
+
+# n_iterations <- 100
+# n_simulations <- 1000
+# 
+# results_list <- vector("list", n_iterations * 2)
+# result_index <- 1
+# 
+# for (i in seq_len(n_iterations)) {
+# 
+#   # Step 1: Shared training/testing split
+#   training_years <- sample(years, 10)
+#   testing_years <- setdiff(years, training_years)
+# 
+#   train_data <- df_test |>
+#     filter(year %in% training_years)
+# 
+#   test_data <- df_test |>
+#     filter(year %in% testing_years)
+# 
+#   # Actual mean annual total catch (kg)
+#   actual_annual_totals <- test_data |>
+#     group_by(year) |>
+#     summarise(
+#       total_catch = sum(catch),
+#       .groups = "drop"
+#     )
+# 
+#   actual_mean <- mean(actual_annual_totals$total_catch)
+# 
+#   # Step 2: Fit and evaluate each model
+#   for (model_name in names(model_formulas)) {
+# 
+#     model_formula <- model_formulas[[model_name]]
+# 
+#     fitted_model <- lm(
+#       model_formula,
+#       data = train_data
+#     )
+# 
+#     predicted_log_catch <- predict(
+#       fitted_model,
+#       newdata = test_data
+#     )
+# 
+#     # Training residuals only
+#     training_residuals <- residuals(fitted_model)
+# 
+#     # Step 3: Simulate survey catches
+#     simulated_mean_totals <- numeric(n_simulations)
+# 
+#     for (j in seq_len(n_simulations)) {
+# 
+#       # Resample residuals on the log scale
+#       simulated_residuals <- sample(
+#         training_residuals,
+#         size = nrow(test_data),
+#         replace = TRUE
+#       )
+# 
+#       simulated_catch <- exp(
+#         predicted_log_catch + simulated_residuals
+#       )
+# 
+#       simulated_data <- data.frame(
+#         year = test_data$year,
+#         catch = simulated_catch
+#       )
+# 
+#       simulated_annual_totals <- simulated_data |>
+#         group_by(year) |>
+#         summarise(
+#           total_catch = sum(catch),
+#           .groups = "drop"
+#         )
+# 
+#       simulated_mean_totals[j] <- mean(
+#         simulated_annual_totals$total_catch
+#       )
+#     }
+# 
+#     # Step 4: Calculate simulation interval
+#     lower_95 <- unname(quantile(
+#       simulated_mean_totals, 0.025
+#     ))
+# 
+#     upper_95 <- unname(quantile(
+#       simulated_mean_totals, 0.975
+#     ))
+# 
+#     predicted_mean <- mean(simulated_mean_totals)
+# 
+#     # Step 5: Evaluate performance
+#     results_list[[result_index]] <- data.frame(
+#       iteration = i,
+#       model = model_name,
+#       predicted_mean = predicted_mean,
+#       actual_mean = actual_mean,
+#       lower_95 = lower_95,
+#       upper_95 = upper_95,
+#       covered = actual_mean >= lower_95 &&
+#                 actual_mean <= upper_95,
+# 
+#       # Absolute error in kg
+#       absolute_error = abs(predicted_mean - actual_mean),
+# 
+#       interval_width = upper_95 - lower_95
+#     )
+# 
+#     result_index <- result_index + 1
+#   }
+# 
+#   if (i %% 10 == 0) {
+#     cat("Completed iteration", i, "of", n_iterations, "\n")
+#   }
+# }
+
+```
+```{r}
+
+# Combine results from both models
+results <- bind_rows(results_list)
+
+head(results)
+
+```
+
+
+Compare models
+```{r}
+model_comparison <- results |>
+  group_by(model) |>
+  summarise(
+    iterations = n(),
+
+    coverage_percent = mean(covered) * 100,
+
+    mean_absolute_error = mean(absolute_error, na.rm = TRUE),
+
+    median_absolute_error = median(absolute_error, na.rm = TRUE),
+
+    mean_interval_width = mean(interval_width, na.rm = TRUE),
+    
+    Lower_2.5th_percentile = quantile(lower_95, 0.025, na.rm = TRUE),
+
+    Upper_97.5th_percentile = quantile(upper_95, 0.975, na.rm = TRUE),
+
+    .groups = "drop"
+    
+  )
+
+print(model_comparison)
+```
+
+
+Plot models
+```{r}
+ggplot(results, aes(x = iteration)) +
+
+  geom_linerange(
+    aes(ymin = lower_95, ymax = upper_95),
+    colour = "steelblue",
+    linewidth = 0.5
+  ) +
+
+  geom_point(
+    aes(y = predicted_mean),
+    colour = "steelblue",
+    size = 1.3
+  ) +
+
+  geom_point(
+    aes(y = actual_mean),
+    colour = "red",
+    size = 1.3
+  ) +
+
+  facet_wrap(
+    ~ model,
+    ncol = 1,
+    labeller = as_labeller(c(
+      "Preliminary Model" = "Preliminary Model",
+      "Model 2" = "Simplified Model"
+    ))
+  ) +
+
+  labs(
+    title = "Regression Models: Simulated Mean Catch and 95% Intervals",
+    subtitle = "Blue = simulated mean; red = observed mean",
+    x = "Testing iteration",
+    y = "Mean annual total catch (kg)"
+  ) +
+
+  theme_minimal() +
+
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+```{r}
+station_predictions_df %>%
+  group_by(model) %>%
+  summarise(
+    # Spread of predicted point estimates
+    Predicted_Catch_95_Range =
+      quantile(predicted, 0.975, na.rm = TRUE) -
+      quantile(predicted, 0.025, na.rm = TRUE),
+
+    # Average width of individual prediction intervals
+    Mean_Interval_Width =
+      mean(upper - lower, na.rm = TRUE),
+
+    # Spread of lower and upper interval bounds
+    Lower_Bound_Range =
+      quantile(lower, 0.975, na.rm = TRUE) -
+      quantile(lower, 0.025, na.rm = TRUE),
+
+    Upper_Bound_Range =
+      quantile(upper, 0.975, na.rm = TRUE) -
+      quantile(upper, 0.025, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+```
+
+

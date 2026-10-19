@@ -1,0 +1,1671 @@
+---
+title: "Dirichlet Model"
+author: "Jessica Zeng"
+date: "2026-08-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Install once if necessary
+install.packages("readxl")
+install.packages("dplyr")
+install.packages("tidyr")
+install.packages("sirt")
+```
+
+
+```{r}
+# Load packages
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(sirt)
+library(ggplot2)
+
+set.seed(566)
+
+```
+
+
+```{r}
+# File location
+file_path <- "./data/spring_historical_english.xlsx"
+
+# Read data
+df <- read_excel(file_path)
+
+# Look at the data
+head(df)
+names(df)
+```
+
+Calculate total catch for each year
+```{r}
+year_total_catch <- df %>%
+  group_by(year) %>%
+  summarise(
+    total_catch = sum(catch, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+head(year_total_catch)
+```
+
+Join total catch back to OG data
+```{r}
+df_proportions <- df %>%
+  left_join(year_total_catch, by = "year")
+
+head(df_proportions)
+```
+
+Calculate each stations proportion of yearly catch
+```{r}
+df_proportions <- df_proportions %>%
+  mutate(
+    proportion = catch / total_catch
+  )
+
+
+head(df_proportions)
+```
+
+Convert to year by station matrix
+```{r}
+
+proportion_table <- df_proportions %>%
+  dplyr::select(year, tow_station, proportion) %>%
+  tidyr::pivot_wider(
+    names_from = tow_station,
+    values_from = proportion,
+    values_fill = 0
+  ) %>%
+  dplyr::arrange(year)
+
+head(proportion_table)
+```
+
+Ensure each year sums to 1
+```{r}
+row_sums <- proportion_table %>%
+  dplyr::select(-year) %>%
+  rowSums()
+
+summary(row_sums)
+all(abs(row_sums - 1) < 1e-10)
+```
+
+Create matrix for Dirichlet Model
+```{r}
+proportion_matrix <- proportion_table %>%
+  dplyr::select(-year) %>%
+  as.matrix()
+
+dim(proportion_matrix)
+```
+38 518 means we have 35 years and 518 stations
+
+## Fit Dirichlet Model
+```{r}
+dirichlet_fit <- dirichlet.mle(proportion_matrix)
+```
+
+Get alpha values and put them in a dataframe
+```{r}
+alpha <- dirichlet_fit$alpha
+
+alpha_table <- data.frame(
+  tow_station = colnames(proportion_matrix),
+  alpha = as.numeric(alpha)
+)
+
+head(alpha_table)
+```
+
+
+Get expected proportion for each station
+E[p_i] = alpha_i / sum of all alpha
+```{r}
+expected_proportions <- dirichlet_fit$xsi
+
+expected_table <- data.frame(
+  tow_station = colnames(proportion_matrix),
+  expected_proportion = as.numeric(expected_proportions)
+)
+
+head(expected_table)
+```
+
+Comparison:
+Historical average vs fitted Dirichlet expectation
+```{r}
+historical_means <- colMeans(proportion_matrix)
+
+comparison <- data.frame(
+  tow_station = colnames(proportion_matrix),
+  historical_mean = historical_means,
+  dirichlet_mean = as.numeric(dirichlet_fit$xsi),
+  alpha = as.numeric(dirichlet_fit$alpha)
+)
+
+head(comparison)
+```
+They should look similar but will not necessarily be the same
+
+Check concentration param
+```{r}
+alpha0 <- dirichlet_fit$alpha0
+
+alpha0
+```
+
+Tells us about the amount of variation the fitted Dirichlet has around its expected proportions.
+
+Alpha a0 = 754.0381
+This means historical proportions tend to stay relatively close to their expected proportions, rather than varying extremely widely. 
+
+Formula: 
+alpha_0 = sum of all alphas
+E[p_i] = alpha_i / alpha_0
+
+
+
+## Generate simulated years
+Once the model is fitted, we can generate station-proportion vectos
+```{r}
+#Adjust this accordingly. Here for 1000 years
+n_sim <- 1000
+
+alpha_matrix <- matrix(
+  alpha,
+  nrow = n_sim,
+  ncol = length(alpha),
+  byrow = TRUE
+)
+
+simulated_proportions <- dirichlet.simul(alpha_matrix)
+```
+
+```{r}
+dim(simulated_proportions)
+```
+Each row will be a possible future year.
+
+```{r}
+simulated_proportions <- as.data.frame(simulated_proportions)
+
+colnames(simulated_proportions) <- colnames(proportion_matrix)
+
+head(simulated_proportions)
+```
+
+Add simulation ID
+```{r}
+simulated_proportions <- simulated_proportions %>%
+  dplyr::mutate(simulation = row_number()) %>%
+  dplyr::select(simulation, everything())
+
+head(simulated_proportions)
+
+```
+
+Individual station checks
+```{r}
+station <- "31501"
+
+historical_min <- min(proportion_matrix[, station], na.rm = TRUE)
+historical_max <- max(proportion_matrix[, station], na.rm = TRUE)
+
+simulated_min <- min(simulated_proportions[[station]], na.rm = TRUE)
+simulated_max <- max(simulated_proportions[[station]], na.rm = TRUE)
+
+c(
+  historical_min = historical_min,
+  historical_max = historical_max,
+  simulated_min = simulated_min,
+  simulated_max = simulated_max
+)
+```
+
+
+Write to new file
+```{r}
+write.csv(
+  simulated_proportions,
+  "simulated_dirichlet_proportions.csv",
+  row.names = FALSE
+)
+```
+
+## Visualisations
+
+### Visualisation 1: One station histroical vs 10000 simulations
+```{r}
+# Choose a station
+station <- "31501"
+
+# Historical proportions
+historical_station <- data.frame(
+  proportion = proportion_matrix[, station]
+)
+
+# Simulated proportions
+simulated_station <- data.frame(
+  proportion = simulated_proportions[[station]]
+)
+
+# Historical min/max
+historical_min <- min(historical_station$proportion, na.rm = TRUE)
+historical_max <- max(historical_station$proportion, na.rm = TRUE)
+
+ggplot(simulated_station, aes(x = proportion)) +
+  
+  # Dirichlet simulations
+  geom_histogram(
+    aes(fill = "Dirichlet simulations"),
+    bins = 50,
+    boundary = 0,
+    alpha = 0.7
+  ) +
+  
+  # Historical minimum
+  geom_vline(
+    aes(
+      xintercept = historical_min,
+      linetype = "Historical minimum"
+    ),
+    colour = "black"
+  ) +
+  
+  # Historical maximum
+  geom_vline(
+    aes(
+      xintercept = historical_max,
+      linetype = "Historical maximum"
+    ),
+    colour = "black"
+  ) +
+  
+  # Historical observations
+  geom_rug(
+    data = historical_station,
+    aes(
+      x = proportion,
+      colour = "Historical observations"
+    ),
+    inherit.aes = FALSE,
+    sides = "b",
+    linewidth = 1
+  ) +
+  
+  scale_fill_manual(
+    name = "Data",
+    values = c("Dirichlet simulations" = "steelblue")
+  ) +
+  
+  scale_colour_manual(
+    name = "Data",
+    values = c("Historical observations" = "firebrick")
+  ) +
+  
+  scale_linetype_manual(
+    name = "Historical range",
+    values = c(
+      "Historical minimum" = "dashed",
+      "Historical maximum" = "dashed"
+    )
+  ) +
+  
+  labs(
+    title = paste("Historical vs Dirichlet simulations for station:", station),
+    x = "Station proportion of total catch",
+    y = "Number of simulations"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+```
+Another station
+```{r}
+# Choose a station
+station <- "47404"
+
+# Historical proportions
+historical_station <- data.frame(
+  proportion = proportion_matrix[, station]
+)
+
+# Simulated proportions
+simulated_station <- data.frame(
+  proportion = simulated_proportions[[station]]
+)
+
+# Historical min/max
+historical_min <- min(historical_station$proportion, na.rm = TRUE)
+historical_max <- max(historical_station$proportion, na.rm = TRUE)
+
+ggplot(simulated_station, aes(x = proportion)) +
+  
+  # Dirichlet simulations
+  geom_histogram(
+    aes(fill = "Dirichlet simulations"),
+    bins = 50,
+    boundary = 0,
+    alpha = 0.7
+  ) +
+  
+  # Historical minimum
+  geom_vline(
+    aes(
+      xintercept = historical_min,
+      linetype = "Historical minimum"
+    ),
+    colour = "black"
+  ) +
+  
+  # Historical maximum
+  geom_vline(
+    aes(
+      xintercept = historical_max,
+      linetype = "Historical maximum"
+    ),
+    colour = "black"
+  ) +
+  
+  # Historical observations
+  geom_rug(
+    data = historical_station,
+    aes(
+      x = proportion,
+      colour = "Historical observations"
+    ),
+    inherit.aes = FALSE,
+    sides = "b",
+    linewidth = 1
+  ) +
+  
+  scale_fill_manual(
+    name = "Data",
+    values = c("Dirichlet simulations" = "steelblue")
+  ) +
+  
+  scale_colour_manual(
+    name = "Data",
+    values = c("Historical observations" = "firebrick")
+  ) +
+  
+  scale_linetype_manual(
+    name = "Historical range",
+    values = c(
+      "Historical minimum" = "dashed",
+      "Historical maximum" = "dashed"
+    )
+  ) +
+  
+  labs(
+    title = paste("Historical vs Dirichlet simulations for station:", station),
+    x = "Station proportion of total catch",
+    y = "Number of simulations"
+  ) +
+  
+  theme_minimal() +
+  theme(
+    legend.position = "right"
+  )
+```
+
+Compare historical & simulated distributions across all stations
+```{r}
+historical_summary <- data.frame(
+  tow_station = colnames(proportion_matrix),
+  mean = colMeans(proportion_matrix),
+  sd = apply(proportion_matrix, 2, sd),
+  min = apply(proportion_matrix, 2, min),
+  max = apply(proportion_matrix, 2, max)
+)
+
+simulated_summary <- data.frame(
+  tow_station = colnames(simulated_proportions),
+  mean = sapply(simulated_proportions, mean),
+  sd = sapply(simulated_proportions, sd),
+  min = sapply(simulated_proportions, min),
+  max = sapply(simulated_proportions, max)
+)
+
+comparison_summary <- historical_summary %>%
+  rename(
+    historical_mean = mean,
+    historical_sd = sd,
+    historical_min = min,
+    historical_max = max
+  ) %>%
+  left_join(
+    simulated_summary %>%
+      rename(
+        simulated_mean = mean,
+        simulated_sd = sd,
+        simulated_min = min,
+        simulated_max = max
+      ),
+    by = "tow_station"
+  )
+```
+
+Historical mean vs Dirichlet simulated mean
+```{r}
+# ggplot(
+#   comparison_summary,
+#   aes(x = historical_mean, y = simulated_mean)
+# ) +
+#   geom_point(
+#     aes(colour = "Station"),
+#     alpha = 0.7,
+#     size = 2
+#   ) +
+#  geom_abline(
+  # slope = 1,
+  # intercept = 0,
+  # aes(linetype = "Perfect agreement"),
+  # colour = "black"
+  # ) +
+  # scale_colour_manual(
+  #   name = "Data",
+  #   values = c("Station" = "steelblue")
+  # ) +
+  # scale_linetype_manual(
+  #   name = "Reference",
+  #   values = c("Perfect agreement" = "dashed")
+  # ) +
+  # labs(
+  #   title = "Historical vs Dirichlet Mean Proportions",
+  #   x = "Historical mean proportion",
+  #   y = "Dirichlet simulated mean proportion"
+  # ) +
+  # theme_minimal() +
+  # theme(
+  #   legend.position = "right"
+  # )
+```
+
+
+```{r}
+# ggplot(
+#   comparison_summary,
+#   aes(x = historical_sd, y = simulated_sd)
+# ) +
+#   geom_point(
+#     aes(colour = "Station"),
+#     alpha = 0.7,
+#     size = 2
+#   ) +
+#   geom_abline(
+#     slope = 1,
+#     intercept = 0,
+#     aes(linetype = "Perfect agreement"),
+#     colour = "black"
+#   ) +
+#   scale_colour_manual(
+#     name = "Data",
+#     values = c("Station" = "steelblue")
+#   ) +
+#   scale_linetype_manual(
+#     name = "Reference",
+#     values = c("Perfect agreement" = "dashed")
+#   ) +
+#   labs(
+#     title = "Historical vs Dirichlet Variability",
+#     x = "Historical standard deviation",
+#     y = "Dirichlet simulated standard deviation"
+#   ) +
+#   theme_minimal() +
+#   theme(
+#     legend.position = "right"
+#   )
+```
+
+Historical minimum vs Dirichlet simulated minimum
+```{r}
+# ggplot(
+#   comparison_summary,
+#   aes(x = historical_min, y = simulated_min)
+# ) +
+#   geom_point(
+#     aes(colour = "Station"),
+#     alpha = 0.7,
+  #   size = 2
+  # ) +
+  # geom_abline(
+  #   slope = 1,
+  #   intercept = 0,
+  #   aes(linetype = "Perfect agreement"),
+  #   colour = "black"
+  # ) +
+  # scale_colour_manual(
+  #   name = "Data",
+  #   values = c("Station" = "steelblue")
+  # ) +
+  # scale_linetype_manual(
+  #   name = "Reference",
+  #   values = c("Perfect agreement" = "dashed")
+  # ) +
+  # labs(
+  #   title = "Historical vs Dirichlet Minimum Proportions",
+  #   x = "Historical minimum proportion",
+  #   y = "Dirichlet simulated minimum proportion"
+  # ) +
+  # theme_minimal() +
+  # theme(
+  #   legend.position = "right"
+  # )
+```
+
+
+Historical maximum vs Dirichlet simulated maximum
+
+```{r}
+# ggplot(
+#   comparison_summary,
+#   aes(x = historical_max, y = simulated_max)
+# ) +
+#   geom_point(
+#     aes(colour = "Station"),
+#     alpha = 0.7,
+#     size = 2
+#   ) +
+#   geom_abline(
+#     slope = 1,
+#     intercept = 0,
+#     aes(linetype = "Perfect agreement"),
+#     colour = "black"
+#   ) +
+#   scale_colour_manual(
+#     name = "Data",
+#     values = c("Station" = "steelblue")
+#   ) +
+#   scale_linetype_manual(
+#     name = "Reference",
+#     values = c("Perfect agreement" = "dashed")
+#   ) +
+#   labs(
+#     title = "Historical vs Dirichlet Maximum Proportions",
+#     x = "Historical maximum proportion",
+#     y = "Dirichlet simulated maximum proportion"
+#   ) +
+#   theme_minimal() +
+#   theme(
+#     legend.position = "right"
+#   )
+```
+
+## VERIFYING
+Use this model to predict catch in one year.
+Use a set of dirichlet to simulate like 100 scenarios --> get 
+
+### PREDICT HISTORICAL
+Simulating for just one historical year
+```{r}
+# 1. Randomly select a historical year
+selected_year <- sample(unique(df$year[df$year >= 2002]), 1)
+
+# 2. Record the actual total catch for that year
+actual_total_catch <- year_total_catch %>%
+  filter(year == selected_year) %>%
+  pull(total_catch)
+
+# 3. Randomly select one row of simulated proportions
+selected_simulation <- sample(seq_len(nrow(simulated_proportions)), 1)
+
+selected_proportions <- simulated_proportions %>%
+  slice(selected_simulation) %>%
+  dplyr::select(-simulation)
+
+cat("Selected historical year:", selected_year, "\n")
+cat("Actual total catch:", actual_total_catch, "kg\n")
+cat("Selected simulation:", selected_simulation, "\n")
+```
+Predict at each station
+```{r}
+# Convert selected proportions to a named vector
+predicted_proportions <- as.numeric(selected_proportions[1, ])
+
+names(predicted_proportions) <- colnames(selected_proportions)
+
+# Calculate predicted catch at each station
+predicted_catch <- predicted_proportions * actual_total_catch
+```
+
+Compare catch at stations
+```{r}
+# Actual station catches for the selected year
+actual_catches <- df %>%
+  filter(year == selected_year) %>%
+  mutate(tow_station = as.character(tow_station)) %>%
+  dplyr::select(tow_station, catch)
+
+# Combine actual and predicted catches
+comparison <- data.frame(
+  tow_station = names(predicted_catch),
+  predicted_catch = as.numeric(predicted_catch)
+) %>%
+  mutate(tow_station = as.character(tow_station)) %>%
+  left_join(actual_catches, by = "tow_station") %>%
+  rename(actual_catch = catch) %>%
+  mutate(
+    error = predicted_catch - actual_catch,
+    absolute_error = abs(error),
+    percentage_error = ifelse(
+      actual_catch > 0,
+      100 * absolute_error / actual_catch,
+      NA_real_
+    )
+  )
+
+# View results
+head(comparison)
+```
+
+Summarise
+```{r}
+# Overall prediction accuracy
+accuracy_summary <- comparison %>%
+  summarise(
+    total_actual_catch = sum(actual_catch, na.rm = TRUE),
+    total_predicted_catch = sum(predicted_catch, na.rm = TRUE),
+    MAE = mean(absolute_error, na.rm = TRUE),
+    RMSE = sqrt(mean(error^2, na.rm = TRUE)),
+    mean_percentage_error = mean(percentage_error, na.rm = TRUE)
+  )
+
+print(accuracy_summary)
+```
+```{r}
+# Combine predicted and actual catches into one dataset
+plot_data <- comparison %>%
+  dplyr::select(predicted_catch, actual_catch) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "type",
+    values_to = "catch"
+  ) %>%
+  mutate(
+    type = recode(
+      type,
+      predicted_catch = "Predicted Catch",
+      actual_catch = "Historical Catch"
+    )
+  )
+
+# Create side-by-side box plots
+ggplot(plot_data, aes(x = type, y = catch, fill = type)) +
+  geom_boxplot() +
+  labs(
+    title = paste("Predicted vs Historical Station Catch —", selected_year),
+    x = NULL,
+    y = "Catch (kg)"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Predicted Catch" = "steelblue",
+      "Historical Catch" = "darkorange"
+    )
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r}
+# Summary statistics for predicted and historical catches
+catch_summary <- plot_data %>%
+  group_by(type) %>%
+  summarise(
+    Min = min(catch, na.rm = TRUE),
+    Q1 = quantile(catch, 0.25, na.rm = TRUE),
+    Median = median(catch, na.rm = TRUE),
+    Mean = mean(catch, na.rm = TRUE),
+    Q3 = quantile(catch, 0.75, na.rm = TRUE),
+    Max = max(catch, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Print results
+cat("Selected historical year:", selected_year, "\n\n")
+print(catch_summary)
+```
+
+
+Box Plot
+```{r}
+# # Historical catch distribution for each station
+# historical_catches <- df %>%
+#   mutate(tow_station = as.character(tow_station))
+# 
+# # Prepare actual and predicted values for the selected year
+# plot_predictions <- comparison %>%
+#   select(tow_station, actual_catch, predicted_catch) %>%
+#   pivot_longer(
+#     cols = c(actual_catch, predicted_catch),
+#     names_to = "type",
+#     values_to = "catch_value"
+#   ) %>%
+#   mutate(
+#     type = recode(
+#       type,
+#       actual_catch = "Actual catch",
+#       predicted_catch = "Predicted catch"
+#     )
+#   )
+# 
+# ggplot() +
+#   geom_boxplot(
+#     data = historical_catches,
+#     aes(x = tow_station, y = catch),
+#     fill = "grey85",
+#     outlier.alpha = 0.2
+#   ) +
+#   geom_point(
+#     data = plot_predictions,
+#     aes(
+#       x = tow_station,
+#       y = catch_value,
+#       colour = type,
+#       shape = type
+#     ),
+#     size = 1.8,
+#     position = position_dodge(width = 0.5)
+#   ) +
+#   scale_colour_manual(
+#     values = c(
+#       "Actual catch" = "blue",
+#       "Predicted catch" = "red"
+#     )
+#   ) +
+#   labs(
+#     title = paste(
+#       "Historical, Actual and Predicted Catch by Station —",
+#       selected_year
+#     ),
+#     x = "Survey station",
+#     y = "Catch (kg)",
+#     colour = NULL,
+#     shape = NULL
+#   ) +
+#   theme_minimal() +
+#   theme(
+#     axis.text.x = element_text(
+#       angle = 90,
+#       vjust = 0.5,
+#       hjust = 1,
+#       size = 6
+#     )
+#   )
+```
+
+
+Prediction Errors
+```{r}
+# ggplot(comparison, aes(x = "", y = error)) +
+#   geom_boxplot(
+#     fill = "lightblue",
+#     outlier.colour = "red"
+#   ) +
+#   geom_hline(
+#     yintercept = 0,
+#     linetype = "dashed"
+#   ) +
+#   labs(
+#     title = paste("Station Catch Prediction Errors —", selected_year),
+#     x = NULL,
+#     y = "Predicted catch - Actual catch (kg)"
+#   ) +
+#   theme_minimal()
+```
+
+```{r}
+# Summary statistics for prediction errors
+error_summary <- comparison %>%
+  summarise(
+    Min = min(error, na.rm = TRUE),
+    Q1 = quantile(error, 0.25, na.rm = TRUE),
+    Median = median(error, na.rm = TRUE),
+    Mean = mean(error, na.rm = TRUE),
+    Q3 = quantile(error, 0.75, na.rm = TRUE),
+    Max = max(error, na.rm = TRUE)
+  )
+
+print(error_summary)
+```
+
+
+
+
+# New Testing
+## Splitting into training and testing
+This test evaluates performance by running different generated proportions on the same test and training set. So every simulation uses the same training years and testing years. 
+
+Splitting
+```{r}
+# Restrict to the evaluation period
+start_year <- 2002
+end_year <- 2022
+
+years <- sort(unique(df$year))
+years <- years[years >= start_year & years <= end_year]
+
+# Randomly select training and test years
+train_years <- sample(years, 10)
+remaining_years <- setdiff(years, train_years)
+test_years <- sample(remaining_years, 10)
+
+cat("Training years:\n")
+print(sort(train_years))
+
+cat("Test years:\n")
+print(sort(test_years))
+```
+
+Fit dirichlet using training
+```{r}
+# Extract training-year proportions
+train_table <- proportion_table %>%
+  filter(year %in% train_years) %>%
+  arrange(year)
+
+# Convert to a matrix
+train_matrix <- train_table %>%
+  dplyr::select(-year) %>%
+  as.matrix()
+
+# Fit the Dirichlet distribution using training data only
+dirichlet_fit <- dirichlet.mle(train_matrix)
+
+alpha <- dirichlet_fit$alpha
+
+# Expected station proportions
+expected_proportions <- dirichlet_fit$xsi
+
+cat("Number of training years:", nrow(train_matrix), "\n")
+cat("Number of stations:", ncol(train_matrix), "\n")
+```
+
+Generate predictions:
+```{r}
+
+n_sim_per_year <- 100
+
+# Store station predictions and accuracy metrics
+all_predictions <- list()
+accuracy_results <- list()
+
+# Consistent station IDs and column order
+station_ids <- colnames(train_matrix)
+
+# Actual catches restricted to the test years
+test_data <- df %>%
+  filter(year %in% test_years) %>%
+  mutate(tow_station = as.character(tow_station))
+
+for (yr in sort(test_years)) {
+
+  # Actual total catch for this test year
+  actual_total <- year_total_catch %>%
+    filter(year == yr) %>%
+    pull(total_catch)
+
+  # Actual catch by station
+  actual_catches <- test_data %>%
+    filter(year == yr) %>%
+    dplyr::select(tow_station, catch)
+
+  # Simulate station proportions from the TRAINING fit
+  alpha_matrix <- matrix(
+    alpha,
+    nrow = n_sim_per_year,
+    ncol = length(alpha),
+    byrow = TRUE
+  )
+
+  simulated_props <- as.matrix(
+    dirichlet.simul(alpha_matrix)
+  )
+
+  colnames(simulated_props) <- station_ids
+
+  for (s in seq_len(n_sim_per_year)) {
+
+    # Predict catch at each station
+    predicted_catch <- simulated_props[s, ] * actual_total
+
+    comparison <- data.frame(
+      tow_station = station_ids,
+      predicted_catch = as.numeric(predicted_catch)
+    ) %>%
+      left_join(actual_catches, by = "tow_station") %>%
+      rename(actual_catch = catch) %>%
+      mutate(
+        year = yr,
+        simulation = s,
+        error = predicted_catch - actual_catch,
+        absolute_error = abs(error),
+        squared_error = error^2,
+        percentage_error = ifelse(
+          actual_catch > 0,
+          100 * absolute_error / actual_catch,
+          NA_real_
+        )
+      )
+
+    # Store station-level results
+    all_predictions[[length(all_predictions) + 1]] <-
+      comparison
+
+    # Calculate accuracy for this simulated prediction
+    accuracy_results[[length(accuracy_results) + 1]] <-
+      comparison %>%
+      summarise(
+        year = first(year),
+        simulation = first(simulation),
+        MAE = mean(absolute_error, na.rm = TRUE),
+        RMSE = sqrt(mean(squared_error, na.rm = TRUE)),
+        MAPE = mean(percentage_error, na.rm = TRUE)
+      )
+  }
+}
+
+# Combine all results
+all_predictions <- bind_rows(all_predictions)
+accuracy_results <- bind_rows(accuracy_results)
+
+head(accuracy_results)
+head(all_predictions)
+```
+
+Summarise test performance
+```{r}
+# Average performance for each held-out year
+yearly_accuracy <- accuracy_results %>%
+  group_by(year) %>%
+  summarise(
+    mean_MAE = mean(MAE, na.rm = TRUE),
+    mean_RMSE = mean(RMSE, na.rm = TRUE),
+    mean_MAPE = mean(MAPE, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(yearly_accuracy)
+
+# Overall performance across test years
+overall_accuracy <- yearly_accuracy %>%
+  summarise(
+    mean_MAE = mean(mean_MAE, na.rm = TRUE),
+    mean_RMSE = mean(mean_RMSE, na.rm = TRUE),
+    mean_MAPE = mean(mean_MAPE, na.rm = TRUE),
+    sd_MAE = sd(mean_MAE, na.rm = TRUE),
+    sd_RMSE = sd(mean_RMSE, na.rm = TRUE)
+  )
+
+print(overall_accuracy)
+```
+
+
+Plots:
+```{r}
+# Prediction Errors
+ggplot(
+  all_predictions,
+  aes(x = factor(year), y = error)
+) +
+  geom_boxplot(
+    fill = "steelblue",
+    outlier.alpha = 0.2
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    colour = "red"
+  ) +
+  labs(
+    title = "Dirichlet Model: Station Prediction Errors",
+    x = "Test Year",
+    y = "Predicted Catch - Actual Catch (kg)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#Actual vs predicted
+# ggplot(
+#   all_predictions,
+#   aes(x = actual_catch, y = predicted_catch)
+# ) +
+#   geom_point(alpha = 0.15, colour = "steelblue") +
+#   geom_abline(
+#     intercept = 0,
+#     slope = 1,
+#     linetype = "dashed",
+#     colour = "red"
+#   ) +
+#   labs(
+#     title = "Dirichlet Model: Actual vs Predicted Catch",
+#     x = "Actual Catch (kg)",
+#     y = "Predicted Catch (kg)"
+#   ) +
+#   theme_minimal()
+```
+
+
+## Testing on different sets of training and tests
+```{r}
+# Settings
+start_year <- 2002
+end_year <- 2022
+n_iterations <- 100
+n_train <- 10
+n_test <- 10
+n_sim_per_year <- 100
+
+set.seed(566)
+
+# Ensure station IDs use consistent types
+df <- df %>%
+  mutate(tow_station = as.character(tow_station))
+
+# Select eligible years
+years <- sort(unique(df$year))
+years <- years[years >= start_year & years <= end_year]
+
+# Store results
+accuracy_results <- list()
+interval_results_list <- list()
+
+result_index <- 1
+interval_index <- 1
+
+# Repeat the full train/test process
+for (i in seq_len(n_iterations)) {
+
+  # ----------------------------------------
+  # Step 1: Select training and testing years
+  # ----------------------------------------
+
+  train_years <- sample(years, n_train)
+
+  remaining_years <- setdiff(years, train_years)
+
+  test_years <- sample(remaining_years, n_test)
+
+  # ----------------------------------------
+  # Step 2: Fit Dirichlet model using training
+  # data only
+  # ----------------------------------------
+
+  train_table <- proportion_table %>%
+    filter(year %in% train_years) %>%
+    arrange(year)
+
+  train_matrix <- train_table %>%
+    dplyr::select(-year) %>%
+    as.matrix()
+
+  dirichlet_fit <- dirichlet.mle(train_matrix)
+
+  alpha <- dirichlet_fit$alpha
+  station_ids <- colnames(train_matrix)
+
+  # ----------------------------------------
+  # Step 3: Prepare testing data
+  # ----------------------------------------
+
+  test_data <- df %>%
+    filter(year %in% test_years)
+
+  # ----------------------------------------
+  # Step 4: Simulate predictions for each
+  # held-out year
+  # ----------------------------------------
+
+  for (yr in sort(test_years)) {
+
+    # Actual total catch for this year
+    actual_total <- year_total_catch %>%
+      filter(year == yr) %>%
+      pull(total_catch)
+
+    if (length(actual_total) != 1 ||
+        is.na(actual_total)) {
+      next
+    }
+
+    # Actual catch at each station
+    actual_catches <- test_data %>%
+      filter(year == yr) %>%
+      dplyr::select(tow_station, catch) %>%
+      group_by(tow_station) %>%
+      summarise(
+        actual_catch = sum(catch, na.rm = TRUE),
+        .groups = "drop"
+      )
+
+    # ----------------------------------------
+    # Step 5: Generate Dirichlet proportions
+    # ----------------------------------------
+
+    alpha_matrix <- matrix(
+      alpha,
+      nrow = n_sim_per_year,
+      ncol = length(alpha),
+      byrow = TRUE
+    )
+
+    simulated_props <- as.matrix(
+      dirichlet.simul(alpha_matrix)
+    )
+
+    colnames(simulated_props) <- station_ids
+
+    # Convert proportions to simulated catches
+    simulated_catches <- simulated_props * actual_total
+
+    # ----------------------------------------
+    # Step 6: Calculate station-level
+    # 95% simulation intervals
+    # ----------------------------------------
+
+    lower_95 <- apply(
+      simulated_catches,
+      2,
+      quantile,
+      probs = 0.025,
+      na.rm = TRUE
+    )
+
+    upper_95 <- apply(
+      simulated_catches,
+      2,
+      quantile,
+      probs = 0.975,
+      na.rm = TRUE
+    )
+
+    predicted_catches <- colMeans(simulated_catches)
+
+    interval_results <- data.frame(
+      tow_station = station_ids,
+      predicted_catch = as.numeric(predicted_catches),
+      lower_95 = as.numeric(lower_95),
+      upper_95 = as.numeric(upper_95)
+    ) %>%
+      left_join(actual_catches, by = "tow_station") %>%
+      mutate(
+        actual_catch = replace_na(actual_catch, 0),
+        absolute_error = abs(
+          predicted_catch - actual_catch
+        ),
+        squared_error = (
+          predicted_catch - actual_catch
+        )^2,
+        percentage_error = ifelse(
+          actual_catch > 0,
+          100 * absolute_error / actual_catch,
+          NA_real_
+        ),
+        inside_interval = (
+          actual_catch >= lower_95 &
+          actual_catch <= upper_95
+        ),
+        iteration = i,
+        year = yr
+      )
+
+    # Store station-level interval results
+    interval_results_list[[interval_index]] <-
+      interval_results
+
+    interval_index <- interval_index + 1
+
+    # ----------------------------------------
+    # Step 7: Store overall accuracy metrics
+    # for each simulated allocation
+    # ----------------------------------------
+
+    for (s in seq_len(n_sim_per_year)) {
+
+      predicted_catch <- simulated_catches[s, ]
+
+      comparison <- data.frame(
+        tow_station = station_ids,
+        predicted_catch = as.numeric(predicted_catch)
+      ) %>%
+        left_join(actual_catches, by = "tow_station") %>%
+        mutate(
+          actual_catch = replace_na(actual_catch, 0),
+          absolute_error = abs(
+            predicted_catch - actual_catch
+          ),
+          squared_error = (
+            predicted_catch - actual_catch
+          )^2,
+          percentage_error = ifelse(
+            actual_catch > 0,
+            100 * absolute_error / actual_catch,
+            NA_real_
+          )
+        )
+
+      accuracy_results[[result_index]] <-
+        comparison %>%
+        summarise(
+          iteration = i,
+          year = yr,
+          simulation = s,
+          MAE = mean(absolute_error, na.rm = TRUE),
+          RMSE = sqrt(
+            mean(squared_error, na.rm = TRUE)
+          ),
+          MAPE = mean(
+            percentage_error,
+            na.rm = TRUE
+          )
+        )
+
+      result_index <- result_index + 1
+    }
+  }
+
+  if (i %% 10 == 0) {
+    cat(
+      "Completed iteration", i,
+      "of", n_iterations, "\n"
+    )
+  }
+}
+
+# ----------------------------------------
+# Step 8: Combine results
+# ----------------------------------------
+
+accuracy_results <- bind_rows(accuracy_results)
+
+interval_results <- bind_rows(interval_results_list)
+
+# ----------------------------------------
+# Step 9: Summarise accuracy
+# ----------------------------------------
+
+accuracy_summary <- accuracy_results %>%
+  summarise(
+    Mean_MAE = mean(MAE, na.rm = TRUE),
+    Mean_RMSE = mean(RMSE, na.rm = TRUE),
+    Mean_MAPE = mean(MAPE, na.rm = TRUE)
+  )
+```
+
+
+```{r}
+
+# ----------------------------------------
+# Step 10: Summarise 95% interval coverage
+# ----------------------------------------
+
+coverage_summary <- interval_results %>%
+  summarise(
+    Total_predictions = n(),
+    Coverage = mean(inside_interval, na.rm = TRUE) * 100,
+    Mean_interval_width = mean(
+      upper_95 - lower_95,
+      na.rm = TRUE
+    ),
+    Lower_2.5th_percentile = quantile(
+      lower_95, 0.025, na.rm = TRUE
+    ),
+    Upper_97.5th_percentile = quantile(
+      upper_95, 0.975, na.rm = TRUE
+    )
+  )
+
+# Display results
+accuracy_summary
+coverage_summary
+```
+
+```{r}
+# Combine results
+accuracy_results <- bind_rows(accuracy_results)
+
+head(accuracy_results)
+```
+
+```{r}
+# Average simulations for each test year and iteration
+yearly_accuracy <- accuracy_results %>%
+  group_by(iteration, year) %>%
+  summarise(
+    mean_MAE = mean(MAE, na.rm = TRUE),
+    mean_RMSE = mean(RMSE, na.rm = TRUE),
+    mean_MAPE = mean(MAPE, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Average performance across the 10 test years
+iteration_accuracy <- yearly_accuracy %>%
+  group_by(iteration) %>%
+  summarise(
+    MAE = mean(mean_MAE, na.rm = TRUE),
+    RMSE = mean(mean_RMSE, na.rm = TRUE),
+    MAPE = mean(mean_MAPE, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Overall performance across all 100 iterations
+overall_accuracy <- iteration_accuracy %>%
+  summarise(
+    mean_MAE = mean(MAE, na.rm = TRUE),
+    sd_MAE = sd(MAE, na.rm = TRUE),
+    mean_RMSE = mean(RMSE, na.rm = TRUE),
+    sd_RMSE = sd(RMSE, na.rm = TRUE),
+    mean_MAPE = mean(MAPE, na.rm = TRUE),
+    sd_MAPE = sd(MAPE, na.rm = TRUE)
+  )
+
+print(overall_accuracy)
+```
+
+
+## Same test but with an interval:
+```{r}
+# # ============================================================
+# # SETTINGS
+# # ============================================================
+# 
+# start_year <- 2002
+# end_year <- 2022
+# 
+# n_iterations <- 100
+# n_train <- 10
+# n_test <- 10
+# n_sim_per_year <- 100
+# 
+# years <- sort(unique(df$year))
+# years <- years[years >= start_year & years <= end_year]
+# 
+# # ============================================================
+# # PREPARE DATA
+# # ============================================================
+# 
+# # Ensure station IDs use consistent types
+# df <- df %>%
+#   mutate(tow_station = as.character(tow_station))
+# 
+# # Store accuracy metrics for each simulation
+# accuracy_results <- list()
+# result_index <- 1
+# 
+# # Store station-level simulation intervals
+# interval_results <- list()
+# interval_index <- 1
+# 
+# # ============================================================
+# # REPEAT THE FULL TRAIN/TEST PROCESS
+# # ============================================================
+# 
+# for (i in seq_len(n_iterations)) {
+# 
+#   # ----------------------------------------------------------
+#   # Step 1: Select training and testing years
+#   # ----------------------------------------------------------
+# 
+#   train_years <- sample(years, n_train)
+# 
+#   remaining_years <- setdiff(years, train_years)
+# 
+#   test_years <- sample(remaining_years, n_test)
+# 
+#   # ----------------------------------------------------------
+#   # Step 2: Fit Dirichlet model using training data only
+#   # ----------------------------------------------------------
+# 
+#   train_table <- proportion_table %>%
+#     filter(year %in% train_years) %>%
+#     arrange(year)
+# 
+#   train_matrix <- train_table %>%
+#     dplyr::select(-year) %>%
+#     as.matrix()
+# 
+#   dirichlet_fit <- dirichlet.mle(train_matrix)
+# 
+#   alpha <- dirichlet_fit$alpha
+#   station_ids <- colnames(train_matrix)
+# 
+#   # ----------------------------------------------------------
+#   # Step 3: Prepare testing data
+#   # ----------------------------------------------------------
+# 
+#   test_data <- df %>%
+#     filter(year %in% test_years)
+# 
+#   # ----------------------------------------------------------
+#   # Step 4: Simulate predictions for each held-out year
+#   # ----------------------------------------------------------
+# 
+#   for (yr in sort(test_years)) {
+# 
+#     # Actual total catch for the testing year
+#     actual_total <- year_total_catch %>%
+#       filter(year == yr) %>%
+#       pull(total_catch)
+# 
+#     if (length(actual_total) != 1 || is.na(actual_total)) {
+#       warning(
+#         "Skipping year ", yr,
+#         " in iteration ", i,
+#         ": actual total catch is missing or not unique."
+#       )
+#       next
+#     }
+# 
+#     # Actual station catches for the testing year
+#     actual_catches <- test_data %>%
+#       filter(year == yr) %>%
+#       dplyr::select(tow_station, catch) %>%
+#       group_by(tow_station) %>%
+#       summarise(
+#         actual_catch = sum(catch, na.rm = TRUE),
+#         .groups = "drop"
+#       )
+# 
+#     # --------------------------------------------------------
+#     # Step 5: Generate Dirichlet proportion simulations
+#     # --------------------------------------------------------
+# 
+#     alpha_matrix <- matrix(
+#       alpha,
+#       nrow = n_sim_per_year,
+#       ncol = length(alpha),
+#       byrow = TRUE
+#     )
+# 
+#     simulated_props <- as.matrix(
+#       dirichlet.simul(alpha_matrix)
+#     )
+# 
+#     colnames(simulated_props) <- station_ids
+# 
+#     # Convert simulated proportions to station-level catches.
+#     # The actual annual total is used to scale each simulation.
+#     simulated_catches <- simulated_props * actual_total
+# 
+#     # --------------------------------------------------------
+#     # Step 6: Calculate station-level 95% simulation intervals
+#     # --------------------------------------------------------
+# 
+#     station_intervals <- data.frame(
+#       tow_station = station_ids,
+#       predicted_mean = colMeans(simulated_catches),
+#       lower_95 = apply(
+#         simulated_catches, 2, quantile,
+#         probs = 0.025, na.rm = TRUE
+#       ),
+#       upper_95 = apply(
+#         simulated_catches, 2, quantile,
+#         probs = 0.975, na.rm = TRUE
+#       )
+#     )
+# 
+#     # Compare predicted catches with actual catches
+#     station_intervals <- station_intervals %>%
+#       left_join(actual_catches, by = "tow_station") %>%
+#       mutate(
+#         actual_catch = replace_na(actual_catch, 0),
+# 
+#         absolute_error = abs(
+#           predicted_mean - actual_catch
+#         ),
+# 
+#         squared_error = (
+#           predicted_mean - actual_catch
+#         )^2,
+# 
+#         percentage_error = ifelse(
+#           actual_catch > 0,
+#           100 * absolute_error / actual_catch,
+#           NA_real_
+#         ),
+# 
+#         within_interval = (
+#           actual_catch >= lower_95 &
+#           actual_catch <= upper_95
+#         ),
+# 
+#         interval_width = upper_95 - lower_95,
+# 
+#         iteration = i,
+#         year = yr
+#       )
+# 
+#     # Store station-level interval results
+#     interval_results[[interval_index]] <- station_intervals
+# 
+#     interval_index <- interval_index + 1
+# 
+#     # --------------------------------------------------------
+#     # Step 7: Store accuracy metrics for each simulation
+#     # --------------------------------------------------------
+# 
+#     for (s in seq_len(n_sim_per_year)) {
+# 
+#       comparison <- data.frame(
+#         tow_station = station_ids,
+#         predicted_catch = as.numeric(
+#           simulated_catches[s, ]
+#         )
+#       ) %>%
+#         left_join(actual_catches, by = "tow_station") %>%
+#         mutate(
+#           actual_catch = replace_na(actual_catch, 0),
+# 
+#           absolute_error = abs(
+#             predicted_catch - actual_catch
+#           ),
+# 
+#           squared_error = (
+#             predicted_catch - actual_catch
+#           )^2,
+# 
+#           percentage_error = ifelse(
+#             actual_catch > 0,
+#             100 * absolute_error / actual_catch,
+#             NA_real_
+#           )
+#         )
+# 
+#       accuracy_results[[result_index]] <- comparison %>%
+#         summarise(
+#           iteration = i,
+#           year = yr,
+#           simulation = s,
+#           MAE = mean(absolute_error, na.rm = TRUE),
+#           RMSE = sqrt(mean(squared_error, na.rm = TRUE)),
+#           MAPE = mean(percentage_error, na.rm = TRUE)
+#         )
+# 
+#       result_index <- result_index + 1
+#     }
+#   }
+# 
+#   if (i %% 10 == 0) {
+#     cat(
+#       "Completed iteration", i,
+#       "of", n_iterations, "\n"
+#     )
+#   }
+# }
+# 
+# # ============================================================
+# # STEP 8: COMBINE RESULTS
+# # ============================================================
+# 
+# accuracy_results_df <- bind_rows(accuracy_results)
+# 
+# interval_results_df <- bind_rows(interval_results)
+# 
+# # ============================================================
+# # STEP 9: SUMMARISE SIMULATION INTERVAL PERFORMANCE
+# # ============================================================
+# 
+# # Overall coverage and mean interval width
+# coverage_summary <- interval_results_df %>%
+#   summarise(
+#     total_station_predictions = n(),
+# 
+#     coverage_percent = 100 * mean(
+#       within_interval, na.rm = TRUE
+#     ),
+# 
+#     mean_interval_width = mean(
+#       interval_width, na.rm = TRUE
+#     ),
+# 
+#     median_interval_width = median(
+#       interval_width, na.rm = TRUE
+#     )
+#   )
+# 
+# print(coverage_summary)
+# 
+# # Coverage and interval width for each testing year
+# yearly_coverage_summary <- interval_results_df %>%
+#   group_by(year) %>%
+#   summarise(
+#     coverage_percent = 100 * mean(
+#       within_interval, na.rm = TRUE
+#     ),
+# 
+#     mean_interval_width = mean(
+#       interval_width, na.rm = TRUE
+#     ),
+# 
+#     .groups = "drop"
+#   )
+# 
+# print(yearly_coverage_summary)
+# 
+# # ============================================================
+# # STEP 10: SUMMARISE ACCURACY METRICS
+# # ============================================================
+# 
+# accuracy_summary <- accuracy_results_df %>%
+#   summarise(
+#     mean_MAE = mean(MAE, na.rm = TRUE),
+#     mean_RMSE = mean(RMSE, na.rm = TRUE),
+#     mean_MAPE = mean(MAPE, na.rm = TRUE)
+#   )
+# 
+# print(accuracy_summary)
+```
+
