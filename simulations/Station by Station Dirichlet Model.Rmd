@@ -109,41 +109,54 @@ historical_summary <- annual_catch_last20 %>%
 
 print(historical_summary)
 ```
+
+
+
 Summarise station by station summary
 ```{r}
-# Summarise historical catch for each station (2002–2021)
-station_catch_summary <- df %>%
-  group_by(tow_station) %>%
-  summarise(
-    Min = min(catch, na.rm = TRUE),
-    Q1 = quantile(catch, 0.25, na.rm = TRUE),
-    Median = median(catch, na.rm = TRUE),
-    Mean = mean(catch, na.rm = TRUE),
-    Q3 = quantile(catch, 0.75, na.rm = TRUE),
-    Max = max(catch, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  arrange(tow_station)
+# Summarise individual catch values across all stations and years
 
-print(station_catch_summary)
-
-# Summarise across the 20 years for all stations
-historical_station_summary <- df %>%
-  group_by(tow_station) %>%
-  summarise(
-    Mean = mean(catch, na.rm = TRUE),
-    .groups = "drop"
+historical_catch_summary <- df %>%
+  filter(
+    !is.na(catch)
   ) %>%
   summarise(
-    Min = min(Mean, na.rm = TRUE),
-    Q1 = quantile(Mean, 0.25, na.rm = TRUE),
-    Median = median(Mean, na.rm = TRUE),
-    Mean = mean(Mean, na.rm = TRUE),
-    Q3 = quantile(Mean, 0.75, na.rm = TRUE),
-    Max = max(Mean, na.rm = TRUE)
+    Number_of_Catches = n(),
+    Min = min(catch),
+    Q1 = quantile(catch, 0.25),
+    Median = median(catch),
+    Mean = mean(catch),
+    Q3 = quantile(catch, 0.75),
+    Max = max(catch),
+    Percentile_2.5 = quantile(catch, 0.025),
+    Percentile_97.5 = quantile(catch, 0.975)
   )
 
-print(historical_station_summary)
+print(historical_catch_summary)
+
+
+# Summarise individual catch values for 2002–2022
+
+recent_catch_summary <- df %>%
+  filter(
+    year >= 2002,
+    year <= 2022,
+    !is.na(catch)
+  ) %>%
+  summarise(
+    Number_of_Catches = n(),
+    Min = min(catch),
+    Q1 = quantile(catch, 0.25),
+    Median = median(catch),
+    Mean = mean(catch),
+    Q3 = quantile(catch, 0.75),
+    Max = max(catch),
+    Percentile_2.5 = quantile(catch, 0.025),
+    Percentile_97.5 = quantile(catch, 0.975)
+  )
+
+print(recent_catch_summary)
+
 ```
 
 
@@ -374,39 +387,39 @@ validation_results <- data.frame(
 )
 
 for (i in 1:n_repetitions) {
-  
+
   # Randomly select one validation year
   selected_year <- sample(validation_data$year, 1)
-  
+
   # Get the historical catch for that year
   historical_value <- validation_data %>%
     filter(year == selected_year) %>%
     pull(catch)
-  
+
   # Equal alpha for every historical year
   alpha <- rep(alpha_value, length(training_catch))
-  
+
   # Generate Dirichlet proportions
   proportions <- rdirichlet(
     n = n_simulations,
     alpha = alpha
   )
-  
+
   # Convert proportions into simulated catches
   simulated_catches <- as.vector(
     proportions %*% training_catch
   )
-  
+
   # Calculate 95% simulation interval
   lower_95 <- quantile(simulated_catches, 0.025)
   upper_95 <- quantile(simulated_catches, 0.975)
-  
+
   # Check whether historical catch is inside interval
   inside <- (
     historical_value >= lower_95 &&
     historical_value <= upper_95
   )
-  
+
   # Store results
   validation_results[i, ] <- c(
     i,
@@ -432,7 +445,13 @@ validation_summary <- validation_results %>%
 validation_summary
 ```
 
+
+
+
+
 # All stations
+
+OLD TEST:
 ```{r warning=FALSE}
 validation_results <- list()
 
@@ -554,11 +573,129 @@ station_summary <- validation_results %>%
 
 station_summary
 ```
+
+
 ```{r}
 # Summary statistics across stations
 summary(station_summary$percentage_inside)
 summary(station_summary$percentage_outside)
 summary(station_summary$MAE)
+```
+
+
+NEW TEST:
+1. Split 10/10 training/testing
+2. Repeat the random split 100 times.
+3. For every split, refit the Dirichlet model using the training catches and generate 10,000 simulated catches.
+4. Calculate a new 95% simulation interval for each split.
+5. Evaluate the held-out observations and aggregate coverage across the 100 repetitions
+
+```{r}
+validation_results <- list()
+
+# Settings
+n_repetitions <- 100
+n_simulations <- 1000
+alpha_value <- 1
+
+# Use the last 20 years
+df_recent <- df %>%
+  filter(
+    year >= 2002,
+    year <= 2021,
+    !is.na(catch)
+  )
+
+station_list <- unique(df_recent$tow_station)
+
+for (station in station_list) {
+
+  # Get data for this station
+  station_data <- df_recent %>%
+    filter(tow_station == station) %>%
+    arrange(year)
+
+  # Require exactly 20 distinct years of data
+  if (n_distinct(station_data$year) != 20 ||
+      nrow(station_data) != 20) {
+    next
+  }
+
+  for (i in 1:n_repetitions) {
+
+    # Randomly split 20 years into 10 training and 10 testing
+    training_years <- sample(station_data$year, 10)
+    testing_years <- setdiff(station_data$year, training_years)
+
+    # Training and testing data
+    training_data <- station_data %>%
+      filter(year %in% training_years)
+
+    testing_data <- station_data %>%
+      filter(year %in% testing_years)
+
+    training_catch <- training_data$catch
+
+    # Fit Dirichlet model using training catches
+    alpha <- rep(alpha_value, length(training_catch))
+
+    proportions <- rdirichlet(
+      n = n_simulations,
+      alpha = alpha
+    )
+
+    # Simulated catches
+    simulated_catches <- as.vector(
+      proportions %*% training_catch
+    )
+
+    # Point prediction
+    predicted_catch <- mean(simulated_catches)
+
+    # 95% simulation interval
+    lower_95 <- as.numeric(
+      quantile(simulated_catches, 0.025)
+    )
+
+    upper_95 <- as.numeric(
+      quantile(simulated_catches, 0.975)
+    )
+
+    # Evaluate all 10 testing years
+    results <- testing_data %>%
+      mutate(
+        repetition = i,
+        predicted_catch = predicted_catch,
+        absolute_error = abs(catch - predicted_catch),
+        lower_95 = lower_95,
+        upper_95 = upper_95,
+        inside_interval = (
+          catch >= lower_95 & catch <= upper_95
+        )
+      ) %>%
+      rename(historical_catch = catch) %>%
+      mutate(tow_station = station)
+
+    validation_results[[
+      paste(station, i, sep = "_")
+    ]] <- results
+  }
+}
+
+# Combine all results
+validation_results <- bind_rows(validation_results)
+
+# Overall coverage and prediction accuracy
+coverage_summary <- validation_results %>%
+  summarise(
+    Total_predictions = n(),
+    Coverage = mean(inside_interval) * 100,
+    MAE = mean(absolute_error),
+    Mean_interval_width = mean(upper_95 - lower_95)
+  )
+
+coverage_summary
+```
 ```
 
 

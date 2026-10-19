@@ -71,6 +71,7 @@ using the relative path 'data/spring_historical_english.xlsx'.
 import os
 import numpy as np
 import pandas as pd
+from pathlib import Path
 import matplotlib.pyplot as plt
 from scipy.stats import norm, gamma, lognorm
 
@@ -83,6 +84,43 @@ from scipy.stats import norm, gamma, lognorm
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from create_distributions import create_distributions, create_gamma_distributions, create_lognormal_distributions, df  # df is already loaded in create_distributions.py
+
+# Find the 95% data interval for the data from years 2002 to 2022.
+BASE_DIR = Path(__file__).resolve().parent
+DATA_FILE = BASE_DIR / 'data' / 'spring_historical_english.xlsx'
+
+# Load the data
+df = pd.read_excel(DATA_FILE)
+
+
+# print the largest station catch value in the entire dataset
+
+print(f"Largest station catch value in the entire dataset: {df['catch'].max()}")
+
+# Filter the data for years 2002 to 2022
+df_filtered = df[(df['year'] >= 2002) & (df['year'] <= 2022)]
+
+# Calculate the 95% data interval (2.5th and 97.5th percentiles)
+# Collate each entire years catch
+df_filtered_grouped = df_filtered.groupby('year')['catch'].sum()
+
+# relabel columns
+df_filtered_grouped = df_filtered_grouped.reset_index()
+
+print(df_filtered_grouped.head())
+
+lower_bound = df_filtered_grouped['catch'].quantile(0.025) 
+upper_bound = df_filtered_grouped['catch'].quantile(0.975)
+
+# Collate across the station catch for the years 2002 to 2022, and find the 95% data interval for the combined data.
+combined_catch = df_filtered['catch']
+combined_lower_bound = combined_catch.quantile(0.025)
+combined_upper_bound = combined_catch.quantile(0.975)
+
+# Print the results
+print(f"95% data interval for years 2002 to 2022: {lower_bound:.2f} to {upper_bound:.2f}")
+print(f"95% data interval for combined station catch (2002-2022): {combined_lower_bound:.2f} to {combined_upper_bound:.2f}")
+
 
 
 # =============

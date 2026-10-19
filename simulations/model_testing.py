@@ -20,7 +20,7 @@ END_YEAR = 2022      # 20 years: 2002-2022 inclusive
 
 N_TRAIN = 10
 N_SIMULATIONS = 1000
-RANDOM_SEED = 818 #247012216 %566 %818
+RANDOM_SEED = 566 #247012216 %566 %818
 
 # ============================================================
 # LOAD DATA
@@ -479,8 +479,20 @@ plt.ylabel('Total catch')
 plt.title(f'Model Simulations and 95% Confidence Intervals (Seed = {RANDOM_SEED})')
 plt.legend()
 
+# Fix axes between 400000 and 700000
+plt.ylim(400000, 700000)
+
 plt.tight_layout()
 plt.show()
+
+# Find the mean interval width for each model
+mean_interval_widths = [
+    np.mean(ci_upper[i] - ci_lower[i]) for i in range(len(model_names))
+]
+
+print("\nMean interval widths for each model:")
+for i, width in enumerate(mean_interval_widths):
+    print(f"{model_names[i]}: {width:.2f}")
 
 # ============================================================
 # SECOND TESTS
@@ -810,6 +822,58 @@ years = sorted(df['year'].dropna().unique())
 # Store results from every iteration and model
 all_results = []
 
+# ============================================================
+# STATION-LEVEL INTERVAL WIDTHS
+# ============================================================
+
+# Separate RNG so adding this doesn't change your existing total-catch
+# results for a given seed
+station_rng = np.random.default_rng(RANDOM_SEED + 1)
+
+station_width_records = []
+
+
+def station_interval_widths(distributions, station_ids, model_name,
+                            n_simulations, rng):
+    """
+    For each station, simulate n_simulations catches from the fitted
+    distribution and return the width of the 95% interval.
+    """
+    rows = []
+
+    for station in station_ids:
+        params = distributions[station]
+
+        if model_name == 'Normal':
+            sims = rng.normal(
+                loc=params['mean'],
+                scale=params['std'],
+                size=n_simulations
+            )
+            sims = np.maximum(sims, 0)   # catch can't be negative
+
+        elif model_name == 'Gamma':
+            sims = rng.gamma(
+                shape=params['shape'],
+                scale=params['scale'],
+                size=n_simulations
+            )
+
+        elif model_name == 'Lognormal':
+            sims = rng.lognormal(
+                mean=params['mu'],
+                sigma=params['sigma'],
+                size=n_simulations
+            )
+
+        lower, upper = np.percentile(sims, [2.5, 97.5])
+
+        rows.append({
+            'Station': station,
+            'Interval Width': upper - lower
+        })
+
+    return rows
 
 # ============================================================
 # REPEAT THE TRAINING / TESTING PROCESS 100 TIMES
@@ -906,6 +970,23 @@ for iteration in range(1, N_REPETITIONS + 1):
         'Gamma': gamma_simulations,
         'Lognormal': lognormal_simulations
     }
+
+        # --------------------------------------------------------
+    # 3b. Station-level interval widths for each model
+    # --------------------------------------------------------
+    station_distributions_by_model = {
+        'Normal': normal_distributions,
+        'Gamma': gamma_distributions,
+        'Lognormal': lognormal_distributions
+    }
+
+    for model_name, dists in station_distributions_by_model.items():
+        for row in station_interval_widths(
+            dists, station_ids, model_name, N_SIMULATIONS, station_rng
+        ):
+            row['Iteration'] = iteration
+            row['Model'] = model_name
+            station_width_records.append(row)
 
     # --------------------------------------------------------
     # 4. Calculate performance for each model
@@ -1018,7 +1099,42 @@ summary_df = summary_df.rename(columns={
 print("\nPerformance summary across 100 iterations:")
 print(summary_df.round(2).to_string(index=False))
 
-summary_df.to_csv(
-    'total_catch_testing_summary.csv',
-    index=False
+# summary_df.to_csv(
+#     'total_catch_testing_summary.csv',
+#     index=False
+# )
+
+
+# Find the mean interval width for each model across all iterations, for  station level simulation
+# First find the mean interval width for each station for each model
+# Then average the means for a single model
+
+# ============================================================
+# 7. MEAN STATION-LEVEL INTERVAL WIDTH PER MODEL
+# ============================================================
+
+station_widths_df = pd.DataFrame(station_width_records)
+
+# Step 1: mean interval width for each station, for each model,
+# averaged across all iterations
+station_mean_widths = (
+    station_widths_df
+    .groupby(['Model', 'Station'])['Interval Width']
+    .mean()
+    .reset_index()
 )
+
+# Step 2: average those station means to get one value per model
+model_mean_width = (
+    station_mean_widths
+    .groupby('Model')['Interval Width']
+    .mean()
+    .reset_index()
+    .rename(columns={'Interval Width': 'Mean Station Interval Width'})
+)
+
+print("\nMean station-level 95% interval width per model:")
+print(model_mean_width.round(2).to_string(index=False))
+
+# Optional: save the per-station detail
+# station_mean_widths.to_csv('station_mean_interval_widths.csv', index=False)
