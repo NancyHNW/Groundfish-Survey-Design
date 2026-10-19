@@ -16,7 +16,7 @@ returns, fish-time limits, and route-repair policies.
 
 | Folder | Contents |
 |---|---|
-| `01_project_records/` | Decision log, meeting minutes, and shared contribution record |
+| `01_project_records/` | Shared contribution record |
 | `02_methods_and_data/` | Research questions, methods, experimental design, data provenance, and system diagrams |
 | `03_experiments_and_outputs/` | Experiment register, report mapping, and curated report outputs |
 | `04_reproduction_and_verification/` | Installation, tests, environment, limitations, and future work |
