@@ -12,5 +12,5 @@ EXP-10,Table 4.7,compendium/03_experiments_and_outputs/report_outputs/tables/pre
 EXP-11,Figure 4.1,compendium/03_experiments_and_outputs/report_outputs/figures/realisation_tabu_move-forward_ns581-nv4_hp0-6-10-12.png,final,experiments/realisation.py,Curated copy; use the report-selected panel
 EXP-12,Figure 4.2,compendium/03_experiments_and_outputs/report_outputs/figures/overflow-profile_tabu_move-forward_ns581-nv4_hp0-6-10-12.png,final,experiments/overflow_map.py,Curated copy; overflow position profile
 EXP-13,Figure 4.3,compendium/03_experiments_and_outputs/report_outputs/figures/overflow-map_tabu_move-forward_ns581-nv4_hp0-6-10-12.png,final,experiments/overflow_map.py,Curated copy; spatial overflow map
-EXP-14,Table 4.1,not saved,replication gap,experiments/overflow_map.py,Direct 1000-scenario scoring was used; save a CSV or record the exact output before submission
-EXP-15,Table 4.8,not available,replication gap,scratch ceiling300.py,Original scratch script is not in the repository; recover or label as historical
+EXP-14,Table 4.1,historical report result,historical,experiments/overflow_map.py,Direct 1000-scenario scoring was used; the source CSV is not retained
+EXP-15,Table 4.8,historical report result,historical,scratch ceiling300.py,The source scratch script is not retained; this result is not reproducible from the current repository

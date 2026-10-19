@@ -10,7 +10,7 @@ files.
 |---|---|---|---|
 | `spring_historical_english.xlsx` | `simulations/data/` | Raw historical input | Fit station catch distributions and draw scenarios |
 | `smb.2019.dat` | `gfsp_code/data/` | Inherited survey input | Station/tow geometry and labels |
-| `ports.csv` | `final_code/data/` and inherited solver data | Input | Port positions |
+| `ports.csv` | `final_code/data/ports.csv`; `gfsp_code/data/ports.csv` | Input | Port positions; the `final_code` copy is used by the heuristic/unified workflow and the `gfsp_code` copy by inherited GFSP workflows |
 | `island.bin` | `final_code/data/` | Input | Iceland coastline plots |
 | `updated_true_dist.npy` | `final_code/local data/` | Rebuild input | Clean upper-triangular distance source |
 | `true_time.npy` | `final_code/local data/` | Active derived input | Travel-time scoring and heuristic routing |
@@ -34,10 +34,13 @@ corrupted port-0 connection, and triangle-inequality violations. Results
 produced before the rebuild are not directly comparable with the report's
 post-fix results.
 
+The rebuilt distance output `true_dist_fixed.npy` is retained in
+`final_code/local data/` as provenance. It is not loaded during normal route
+scoring.
+
 ## Data handling requirements
 
 For each new derived file, record the source file, processing script, date,
 units, dimensions, and whether it is required for normal execution. Large
 generated outputs should be referenced by the experiment register rather than
 duplicated here.
-

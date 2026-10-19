@@ -3,7 +3,7 @@
 | Item | Meaning | Units/shape |
 |---|---|---|
 | Station catch | Catch assigned to one station in one scenario | kg; one value per station |
-| Vessel capacity | Maximum catch carried before offloading | kg |
+| Vessel capacity | Maximum catch carried before offloading | tonnes; vessels 1–4 have capacities 14, 45, 200, and 200 t |
 | Travel distance | Distance between survey nodes | nautical miles |
 | Travel time | Sailing time between survey nodes | hours; 1175 x 1175 active matrix |
 | Planned time | Time of the deterministic route | hours |

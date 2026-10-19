@@ -2,9 +2,9 @@
 
 ## Prerequisites
 
-Use Python 3.12, the package versions listed in the repository
-[`README.md`](../../README.md), and a licensed Gurobi installation. Run
-commands from the repository root.
+Use Python 3.12.10, the package versions listed in
+[`software_environment.md`](software_environment.md), and a licensed Gurobi
+installation. Run commands from the repository root.
 
 ## Basic verification
 
@@ -43,4 +43,3 @@ This regenerates derived matrix output. Read the matrix documentation before
 replacing active files. Full heuristic solves can vary with machine load
 because their restart loop is wall-clock limited; saved plans should be used
 when a fixed route is required.
-

@@ -54,9 +54,7 @@ planned routes can differ between machines even with the same seed. Scenario
 sets with different sizes are separate random draws and must not be
 differenced as if one were nested inside the other.
 
-## ========================================================
-
-# Research method - Catch Modelling
+## Catch modelling
 
 This section describes the catch modelling and prediction methodology independently of the implementation.
 

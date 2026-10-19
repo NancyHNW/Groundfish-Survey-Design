@@ -14,7 +14,3 @@ The report's results section is supported by the artifact register in
 - Capacity buffers reduce overflow risk but increase planned route time.
 - Recourse strategy performance depends on the policy and threshold; results
   must be compared using the same scenario design.
-
-These statements should be checked against the final submitted report before
-the register is treated as final.
-
