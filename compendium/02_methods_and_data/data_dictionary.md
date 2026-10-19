@@ -11,4 +11,3 @@
 | Overflow probability | Fraction of scored scenarios with a true capacity overflow | proportion |
 | Unscheduled returns | Forced port returns caused by overflow | count per scenario |
 | Capacity buffer beta | Fraction of vessel capacity used in route construction | dimensionless |
-
