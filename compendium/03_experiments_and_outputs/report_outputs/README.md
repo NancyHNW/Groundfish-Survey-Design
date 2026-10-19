@@ -13,6 +13,7 @@ produced it. The stable experiment ID and report mapping are recorded in
 
 - `tables/` contains the CSV artifacts supporting report tables.
 - `figures/` contains the selected report figures.
+- `simulations/` contains the outputs of simulations. 
 
 These files are evidence artifacts, not normal experiment inputs. To generate
 new results, run the documented experiment modules from the repository root.

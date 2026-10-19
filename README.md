@@ -20,7 +20,7 @@ than the time it was planned to take.
 | `archive/report-reproduction/` | Archived Chapter 4 batch scripts and duplicate reproducibility plans; retained for provenance, not normal operation |
 | `final_code/` | Inherited heuristic planners (GRASP, tabu search, simulated annealing) and the Gurobi TSP |
 | `gfsp_code/` | Inherited MILP formulations, the LKH solver and 1,620 test problems |
-| `simulations/` | Historical survey data and the catch analysis built from it |
+| `simulations/` | Historical survey data and the catch analysis and models built from it |
 
 ## Requirements
 
