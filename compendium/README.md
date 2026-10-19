@@ -21,12 +21,6 @@ returns, fish-time limits, and route-repair policies.
 | `03_experiments_and_outputs/` | Experiment register, report mapping, and curated report outputs |
 | `04_reproduction_and_verification/` | Installation, tests, environment, limitations, and future work |
 
-The core method, data, experiment, reproduction, and verification documents
-are included. Add the meeting-minutes PDFs to
-`01_project_records/meeting_minutes/` when they are ready. The compendium is
-a joint record: shared code, data, experiments, diagrams, and report outputs
-are documented once rather than duplicated for each student.
-
 ## Canonical project materials
 
 | Material | Location |
@@ -55,7 +49,5 @@ roles are documented in the repository's main
 
 ## Joint contribution record
 
-Student 1 and Student 2 are recorded in
+Nancy and Jessica's contributions are recorded in
 [`01_project_records/contribution_record.md`](01_project_records/contribution_record.md).
-Replace the placeholder student labels and IDs before submission, and record
-each person's individual contributions alongside the shared project work.
